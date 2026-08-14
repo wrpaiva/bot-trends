@@ -1,0 +1,1 @@
+# src/infrastructure/collectors/__init__.py

@@ -1,0 +1,49 @@
+# ===========================================
+# 🔧 Frontend Development - Docker Compose
+# ===========================================
+# Uso: docker compose up
+# Para rebuild: docker compose build --no-cache
+# ===========================================
+
+services:
+  # =========================================
+  # 🌐 Web (Dev com hot-reload)
+  # =========================================
+  web:
+    build:
+      context: .
+      target: development
+    container_name: trends_web_dev
+    environment:
+      VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # =========================================
+  # 🚀 Web (Produção local para teste)
+  # =========================================
+  web-prod:
+    build:
+      context: .
+      target: production
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    container_name: trends_web_prod
+    profiles:
+      - prod
+    ports:
+      - "80:80"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3

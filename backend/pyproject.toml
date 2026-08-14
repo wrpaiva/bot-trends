@@ -1,0 +1,124 @@
+[tool.poetry]
+name = "bot-trends"
+version = "0.1.0"
+description = "Motor híbrido de análise de tendências (Marketplace + Social)"
+authors = ["Seu Nome <seu@email.com>"]
+readme = "README.md"
+packages = [
+  { include = "apps" },
+  { include = "src" }
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# API
+fastapi = "^0.110.0"
+uvicorn = { extras = ["standard"], version = "^0.27.0" }
+slowapi = "^0.1.9"
+
+# Worker
+celery = "^5.3.6"
+redis = "^5.0.1"
+
+# DB
+pymongo = "^4.6.2"
+
+# HTTP
+httpx = "^0.27.0"
+tenacity = "^8.2.3"
+
+# Config
+pydantic = "^2.6.3"
+pydantic-settings = "^2.2.1"
+python-dotenv = "^1.0.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.2"
+pytest-cov = "^4.1.0"
+mongomock = "^4.1.2"
+
+[tool.poetry.group.lint.dependencies]
+ruff = "^0.6.9"
+black = "^24.8.0"
+pre-commit = "^3.8.0"
+
+[tool.poetry.group.type.dependencies]
+mypy = "^1.11.2"
+types-redis = "^4.6.0.20241004"
+
+# ---------------------------
+# Pytest
+# ---------------------------
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-ra -q"
+testpaths = ["tests"]
+
+# ---------------------------
+# Ruff (lint + import sorting)
+# ---------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+  ".venv",
+  "dist",
+  "build",
+  "__pycache__",
+]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",      # pycodestyle/pyflakes
+  "I",                # isort (imports)
+  "B",                # bugbear
+  "UP",               # pyupgrade
+  "SIM",              # simplify
+  "C4",               # comprehensions
+  "N",                # pep8-naming
+]
+ignore = [
+  "E501",  # deixa o Black mandar no tamanho de linha
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["N802", "N803", "N806"]
+
+# ---------------------------
+# Black (format)
+# ---------------------------
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+# ---------------------------
+# Mypy (type check)
+# ---------------------------
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+# Ajuda o mypy a não travar por causa de pacotes sem stubs.
+# Se quiser ficar mais rígido depois, removemos ignore_missing_imports
+# e adicionamos stubs específicos.
+
+# ---------------------------
+# Coverage (pytest-cov)
+# ---------------------------
+[tool.coverage.run]
+branch = true
+source = ["src", "apps"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

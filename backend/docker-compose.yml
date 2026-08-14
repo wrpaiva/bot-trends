@@ -1,0 +1,107 @@
+# ===========================================
+# 🔧 Backend Development - Docker Compose
+# ===========================================
+# Uso: docker compose up
+# Para rebuild: docker compose build --no-cache
+# ===========================================
+
+services:
+  # =========================================
+  # 🗄️ MongoDB (Dev)
+  # =========================================
+  mongo:
+    image: mongo:7
+    container_name: trends_mongo_dev
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_dev_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # =========================================
+  # 🔴 Redis (Dev)
+  # =========================================
+  redis:
+    image: redis:7-alpine
+    container_name: trends_redis_dev
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # =========================================
+  # 🚀 API (Dev com hot-reload)
+  # =========================================
+  api:
+    build:
+      context: .
+      target: development
+    container_name: trends_api_dev
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: trends
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - /app/.venv
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # =========================================
+  # ⚙️ Worker (Dev)
+  # =========================================
+  worker:
+    build:
+      context: .
+      target: development
+    container_name: trends_worker_dev
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: trends
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A apps.worker.main.celery_app worker --loglevel=debug
+    volumes:
+      - .:/app
+      - /app/.venv
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # =========================================
+  # ⏰ Beat (Dev)
+  # =========================================
+  beat:
+    build:
+      context: .
+      target: development
+    container_name: trends_beat_dev
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A apps.worker.main.celery_app beat --loglevel=debug
+    volumes:
+      - .:/app
+      - /app/.venv
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  mongo_dev_data:
