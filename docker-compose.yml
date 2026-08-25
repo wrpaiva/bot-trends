@@ -92,6 +92,8 @@ services:
       MONGO_URI: mongodb://${MONGO_USER:-trends}:${MONGO_PASSWORD:-trends_secret}@mongo:27017
       MONGO_DB: ${MONGO_DB:-trends}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
+      API_KEY: ${API_KEY:?defina API_KEY no .env da raiz}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost}
     ports:
       - "8000:8000"
     networks:
@@ -130,7 +132,7 @@ services:
       MONGO_URI: mongodb://${MONGO_USER:-trends}:${MONGO_PASSWORD:-trends_secret}@mongo:27017
       MONGO_DB: ${MONGO_DB:-trends}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-    command: celery -A apps.worker.main.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A apps.worker.main.celery_app worker --loglevel=info --concurrency=2 -Q celery,ml,tiktok,trend
     networks:
       - backend
     depends_on:
