@@ -5,11 +5,12 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Instalar poetry
-RUN pip install --no-cache-dir poetry
+# Instalar poetry. Versões fixas de propósito: `poetry export` deixou de ser
+# embutido no Poetry 2.x e virou plugin — sem ele este RUN falha.
+RUN pip install --no-cache-dir poetry==2.4.2 poetry-plugin-export==1.10.0
 
 # Copiar apenas arquivos de dependências (cache layer)
-COPY pyproject.toml poetry.lock* ./
+COPY pyproject.toml poetry.lock ./
 
 # Exportar requirements.txt (mais leve que poetry em runtime)
 RUN poetry export -f requirements.txt --output requirements.txt --without-hashes
@@ -62,9 +63,9 @@ FROM python:3.11-slim AS development
 WORKDIR /app
 
 # Instalar poetry
-RUN pip install --no-cache-dir poetry
+RUN pip install --no-cache-dir poetry==2.4.2
 
-COPY pyproject.toml poetry.lock* ./
+COPY pyproject.toml poetry.lock ./
 
 # Instalar com dev dependencies
 RUN poetry config virtualenvs.create false && \

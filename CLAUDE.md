@@ -109,31 +109,44 @@ específico use `@limiter.limit(...)` — e nesse caso o handler **precisa** rec
 
 ---
 
-## Armadilhas conhecidas (verificado em 2026-08-25)
+## Armadilhas conhecidas (verificado em 2026-09-04)
 
 Não são "coisas a arrumar agora", são coisas que vão te morder se você não souber:
 
-1. **Frontend não envia `X-API-Key`.** `frontend/src/api.js` faz `fetch` sem header, e todas as
-   rotas do router exigem a chave → dashboard toma 401. É o próximo bug a matar.
-2. **`LLM_MODEL` vs `LLM_MODEL_NAME`.** O código lê `LLM_MODEL`; o `backend/.env` define
-   `LLM_MODEL_NAME`. O modelo configurado é silenciosamente ignorado (cai no default).
-3. **`pytest` sozinho não acha os testes**: `testpaths = ["tests"]` no pyproject, mas os testes
-   estão em `src/tests/`. Use `pytest src/tests`.
+1. **A API do Mercado Livre não é mais pública.** `/highlights` devolve 401
+   `unspecified_token`, `/sites/MLB/search` devolve 403 e `/items` devolve 401. O
+   `MercadoLivreCollector` não tem nenhum suporte a OAuth — só lê `ML_BASE_URL` e `ML_SITE_ID`.
+   **Nenhuma coleta do ML funciona hoje**, e a Fase 2 inteira depende disso (TIE-41).
+2. **O seed de categorias e o `collect_ml` discordam do schema.** `apps/bootstrap/main.py`
+   grava categorias com `enabled: False` e sem `ml_category_id`; `collect_ml` filtra por
+   `{"enabled": True, "ml_category_id": {"$exists": True}}`. Recém-instalado, o sistema
+   devolve `{"status": "no enabled categories"}` para sempre (TIE-20).
+3. **`collect_ml` devolve `status: ok` mesmo quando toda requisição falhou.** O erro é logado
+   e engolido; o retorno é `{"status": "ok", "inserted": 0}`. Falha silenciosa (TIE-17).
 4. **`get_db()` abre um `MongoClient` novo a cada chamada** (`infrastructure/db/mongo.py`) —
-   por request e por task. Não é pool reaproveitado.
+   por request e por task. Não é pool reaproveitado (TIE-7).
 5. **`rank_momentum` e `reviews_velocity` estão hardcoded em `0.0`** em `tasks_trend.py`,
-   ou seja 35% do score numérico é sempre zero.
-6. **README documenta `GET /search`, que não existe** em `routes.py`.
+   ou seja 35% do score numérico é sempre zero (TIE-16).
+6. **README documenta `GET /search`, que não existe** em `routes.py` (TIE-30/TIE-33).
 7. `datetime.utcnow()` é usado em todo lugar (deprecado no 3.12; o projeto fixa 3.11).
-   Existe `src/infrastructure/utils/datetime_utils.py` subutilizado.
+   Existe `src/infrastructure/utils/datetime_utils.py` subutilizado (TIE-10).
+8. **`MONGO_PASSWORD` só vale na primeira subida do volume.** `MONGO_INITDB_ROOT_PASSWORD` é
+   lido apenas quando `/data/db` está vazio. Trocar a senha no `.env` com o volume
+   `trends_mongo_data` já existente dá `storedKey mismatch` e o healthcheck nunca fica verde.
+   Para valer: `docker compose down && docker volume rm trends_mongo_data`.
+9. **`http://localhost:80` não é uma origem válida.** Na porta 80 o browser envia
+   `http://localhost`, sem a porta. Com `:80` explícito em `CORS_ORIGINS` o preflight falha.
+10. **Os containers `beat` e `worker` aparecem como `unhealthy` e isso é falso.** Ambos herdam
+    o `HEALTHCHECK` do Dockerfile (`curl localhost:8000/health`), mas nenhum dos dois serve
+    HTTP — só a API serve. Cosmético, mas polui o `docker compose ps` (TIE-38).
 
 ## Pendências de higiene do repositório
 
-- Não existe `poetry.lock` commitado → builds não reprodutíveis, e o `poetry export` do
-  Dockerfile depende de plugin no Poetry 2.x.
 - Arquivos mortos: `src/infrastructure/db/migrations/versions/runner.py` (vazio, duplica o runner
   real em `migrations/runner.py`), `backend/docker-compose.yml` e `frontend/docker-compose.yml`
   (o compose da raiz é o oficial).
+- `ruff check .` acusa ~138 erros pré-existentes no backend (a maioria `I001` e `W292`).
+  Não é regressão; só nunca foi rodado. Ao mexer num arquivo, deixe-o limpo.
 
 ## Já corrigido (não reintroduzir)
 
@@ -142,6 +155,26 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
 - Worker do compose não tinha `-Q`, então nenhuma task roteada para `ml`/`tiktok`/`trend` rodava.
 - `.gitignore` criado e `backend/.env` removido do índice do git.
 - `API_KEY`/`CORS_ORIGINS` não chegavam ao container da API.
+- **`db/__init__.py` continha o código de `db/migrations/__init__.py`** e importava
+  `.versions.*` de um diretório que não existia. Derrubava API, worker e migrations no mesmo
+  `ModuleNotFoundError`. Coberto agora por `src/tests/test_imports_smoke.py` — não apague
+  esse teste, ele é a única coisa que impede a regressão de voltar calada (TIE-40).
+- **Frontend não enviava `X-API-Key`.** `api.js` agora manda o header a partir de
+  `import.meta.env.VITE_API_KEY`; o compose injeta `${API_KEY}` como `VITE_API_KEY` no build
+  do `web`. Fonte única de propósito: duas variáveis que precisam ser iguais divergem, e o
+  sintoma é 401 (TIE-1).
+- **`LLM_MODEL` vs `LLM_MODEL_NAME`.** `openai_compatible.py` lê de `settings` (não mais de
+  `os.environ`), o default mora só em `config.py`, e o modelo efetivo vai para o log no
+  startup do cliente (TIE-2).
+- **`testpaths` apontava para `tests`**, que não existe → `pytest` saía verde sem coletar nada.
+  Agora é `src/tests`. **Decisão: os testes ficam em `src/tests/`**, não migram para
+  `backend/tests/` (TIE-4).
+- **`poetry.lock` commitado** e o `poetry export` do Dockerfile consertado: no Poetry 2.x ele
+  virou plugin, então o builder instala `poetry==2.4.2` + `poetry-plugin-export==1.10.0`,
+  ambos com versão fixa (TIE-6).
+- **Mongo e Redis não são mais publicados em `0.0.0.0`** — só em `127.0.0.1`, e as portas do
+  host viraram configuráveis (`MONGO_HOST_PORT`, `REDIS_HOST_PORT`, `API_HOST_PORT`,
+  `WEB_HOST_PORT`, `WEB_DEV_HOST_PORT`) para conviver com outros projetos na mesma máquina.
 
 ---
 
