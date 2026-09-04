@@ -1,3 +1,9 @@
+# check=skip=SecretsUsedInArgOrEnv
+# O check acima é suprimido de propósito: VITE_API_KEY *precisa* entrar no build,
+# porque o Vite inlina a variável no bundle. A chave já é pública para qualquer
+# visitante do dashboard; escondê-la do Dockerfile não esconderia de ninguém.
+# A solução correta (auth de verdade) está na TIE-27.
+
 # ===========================================
 # 🏗️ Stage 1: Build
 # ===========================================
@@ -18,7 +24,9 @@ COPY . .
 ARG VITE_API_BASE=http://localhost:8000
 ENV VITE_API_BASE=$VITE_API_BASE
 
-RUN npm run build
+# Passada inline no RUN em vez de ENV, para não persistir na camada do builder.
+ARG VITE_API_KEY
+RUN VITE_API_KEY="$VITE_API_KEY" npm run build
 
 # ===========================================
 # 🚀 Stage 2: Production (nginx)

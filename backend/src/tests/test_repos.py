@@ -1,10 +1,16 @@
 # tests/test_repos.py
 
 import datetime as dt
+
 import mongomock
 
-from src.infrastructure.db.repos import ProductRepo, MetricsRepo
+from src.infrastructure.db.repos import MetricsRepo, ProductRepo
 from src.infrastructure.db.trend_repos import TrendInsightRepo
+
+
+def _ms(d: dt.datetime) -> dt.datetime:
+    """Trunca para milissegundos, a resolução que o BSON de fato guarda."""
+    return d.replace(microsecond=(d.microsecond // 1000) * 1000)
 
 
 def test_productrepo_upsert_generates_and_stabilizes_uuid():
@@ -88,6 +94,9 @@ def test_trendinsightrepo_inserts_window_fields():
 
     doc = db["trend_insights"].find_one({"product_id": "uuid-1"}, {"_id": 0})
     assert doc["window_hours"] == 72
-    assert doc["window_from"] == window_from
-    assert doc["window_to"] == window_to
+    # O BSON armazena datetime com resolução de milissegundos, então os
+    # microssegundos são truncados na ida ao banco. Comparar igualdade exata
+    # com o valor original falharia sempre que ele não fosse redondo.
+    assert doc["window_from"] == _ms(window_from)
+    assert doc["window_to"] == _ms(window_to)
     assert doc["final_score"] == 74.0

@@ -53,7 +53,7 @@ types-redis = "^4.6.0.20241004"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 addopts = "-ra -q"
-testpaths = ["tests"]
+testpaths = ["src/tests"]
 
 # ---------------------------
 # Ruff (lint + import sorting)
@@ -83,7 +83,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["N802", "N803", "N806"]
+"src/tests/*" = ["N802", "N803", "N806"]
 
 # ---------------------------
 # Black (format)
