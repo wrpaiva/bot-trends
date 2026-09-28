@@ -1,8 +1,8 @@
 # apps/migrate/main.py
 
-from src.infrastructure.db.mongo import get_db
 from src.infrastructure.db.migrations import get_migrations
 from src.infrastructure.db.migrations.runner import MigrationRunner
+from src.infrastructure.db.mongo import get_db
 
 
 def main() -> int:

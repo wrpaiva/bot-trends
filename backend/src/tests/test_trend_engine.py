@@ -1,9 +1,9 @@
 # tests/test_trend_engine.py
 
-from src.domain.trend_models import TrendInput, LLMResult
-from src.domain.scoring import NumericScoreStrategy
 from src.application.trend_engine import HybridTrendEngine
 from src.domain.interfaces import LLMClient
+from src.domain.scoring import NumericScoreStrategy
+from src.domain.trend_models import LLMResult, TrendInput
 
 
 class FakeLLM(LLMClient):
@@ -28,21 +28,21 @@ class FakeLLM(LLMClient):
 
 
 def base_input(**overrides):
-    data = dict(
-        product_id="uuid-1",
-        title="Produto Y",
-        category="cat",
-        price=100.0,
-        sold_quantity=None,
-        views_24h=20_000,
-        engagement_24h=1200,
-        mentions_24h=20,
-        rank_momentum=0.4,
-        reviews_velocity=5.0,
-        social_velocity=0.25,
-        price_volatility=0.05,
-        previous_final_score=None,
-    )
+    data = {
+        "product_id": "uuid-1",
+        "title": "Produto Y",
+        "category": "cat",
+        "price": 100.0,
+        "sold_quantity": None,
+        "views_24h": 20_000,
+        "engagement_24h": 1200,
+        "mentions_24h": 20,
+        "rank_momentum": 0.4,
+        "reviews_velocity": 5.0,
+        "social_velocity": 0.25,
+        "price_volatility": 0.05,
+        "previous_final_score": None,
+    }
     data.update(overrides)
     return TrendInput(**data)
 
@@ -61,7 +61,13 @@ def test_hybrid_combination_uses_weights():
 
     assert res.llm_score_0_100 == 80.0
     assert res.final_score_0_100 == expected
-    assert res.trend_classification in ("ESTAVEL", "SUBINDO", "VIRALIZANDO", "PICO_TEMPORARIO", "EM_QUEDA")
+    assert res.trend_classification in (
+        "ESTAVEL",
+        "SUBINDO",
+        "VIRALIZANDO",
+        "PICO_TEMPORARIO",
+        "EM_QUEDA",
+    )
 
 
 def test_engine_fallback_when_llm_fails():

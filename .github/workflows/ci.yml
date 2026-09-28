@@ -1,0 +1,119 @@
+# CI do Trends Intelligence Engine (TIE-11).
+#
+# Cada job pega uma classe de quebra que já aconteceu neste repositório:
+# testes e lint no backend, `npm run build` (index.html fora da raiz do Vite)
+# e `docker build` das duas imagens (Dockerfile com lixo depois do CMD).
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend-testes:
+    name: Backend · testes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    # Mongo real para o que o mongomock não implementa (`$text` do GET /search).
+    # Sem MONGO_TEST_URI esses testes são pulados — aqui eles rodam sempre.
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping: 1})'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MONGO_TEST_URI: mongodb://localhost:27017
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Mesma versão fixada no Dockerfile.
+      - name: Instalar Poetry
+        run: pipx install poetry==2.4.2
+
+      - name: Instalar dependências
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --no-root --no-interaction
+
+      - name: pytest com cobertura
+        run: poetry run pytest src/tests --cov=src --cov=apps --cov-report=term-missing
+
+  backend-lint:
+    name: Backend · lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar Poetry
+        run: pipx install poetry==2.4.2
+
+      - name: Instalar ferramentas de lint
+        run: poetry install --no-root --no-interaction --only lint
+
+      - name: ruff
+        run: poetry run ruff check .
+
+      - name: black
+        run: poetry run black --check .
+
+  frontend-build:
+    name: Frontend · build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # Lógica da tela (ordenação, estados, mensagens de erro) — TIE-28
+      - run: npm test
+
+      - run: npm run build
+
+  docker-build:
+    name: Docker · build ${{ matrix.servico }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        servico: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Só valida que a imagem de produção constrói; nada é publicado.
+      - name: docker build
+        run: docker build --target production -t trends-${{ matrix.servico }}:ci ${{ matrix.servico }}

@@ -6,6 +6,7 @@ import mongomock
 
 from src.infrastructure.db.repos import MetricsRepo, ProductRepo
 from src.infrastructure.db.trend_repos import TrendInsightRepo
+from src.infrastructure.utils.datetime_utils import utcnow
 
 
 def _ms(d: dt.datetime) -> dt.datetime:
@@ -52,26 +53,29 @@ def test_metricsrepo_inserts_metric():
     db = client["testdb"]
 
     repo = MetricsRepo(db)
-    repo.insert({
-        "ts": dt.datetime.utcnow(),
-        "product_id": "uuid-1",
-        "source": "tiktok",
-        "views": 1000,
-        "engagement": 50,
-        "mentions": 1,
-        "price": None,
-    })
+    repo.insert(
+        {
+            "ts": utcnow(),
+            "product_id": "uuid-1",
+            "source": "tiktok",
+            "views": 1000,
+            "engagement": 50,
+            "mentions": 1,
+            "price": None,
+        }
+    )
 
     assert db["metrics"].count_documents({"product_id": "uuid-1"}) == 1
 
 
 def test_trendinsightrepo_inserts_window_fields():
-    client = mongomock.MongoClient()
+    # tz_aware como em mongo.get_client(): as datas voltam aware em UTC (TIE-10)
+    client = mongomock.MongoClient(tz_aware=True)
     db = client["testdb"]
 
     repo = TrendInsightRepo(db)
 
-    window_to = dt.datetime.utcnow()
+    window_to = utcnow()
     window_from = window_to - dt.timedelta(hours=72)
 
     repo.insert(

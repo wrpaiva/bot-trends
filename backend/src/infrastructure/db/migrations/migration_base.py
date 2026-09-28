@@ -2,7 +2,9 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
 from pymongo.database import Database
+
 
 @dataclass(frozen=True)
 class MigrationMeta:
@@ -10,6 +12,7 @@ class MigrationMeta:
     from_version: int
     to_version: int
     description: str
+
 
 class Migration(ABC):
     meta: MigrationMeta

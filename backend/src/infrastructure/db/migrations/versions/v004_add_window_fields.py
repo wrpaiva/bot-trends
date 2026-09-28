@@ -1,8 +1,13 @@
 # src/infrastructure/db/migrations/versions/v004_add_window_fields.py
 
 import datetime as dt
+
 from pymongo.database import Database
+
+from src.infrastructure.utils.datetime_utils import utcnow
+
 from ..migration_base import Migration, MigrationMeta
+
 
 class V004AddWindowFields(Migration):
     meta = MigrationMeta(
@@ -14,7 +19,7 @@ class V004AddWindowFields(Migration):
 
     def up(self, db: Database) -> None:
         insights = db["trend_insights"]
-        now = dt.datetime.utcnow()
+        now = utcnow()
 
         # define default para registros antigos que não tinham janela
         default_hours = 72
@@ -32,5 +37,11 @@ class V004AddWindowFields(Migration):
 
             insights.update_one(
                 {"_id": doc["_id"], "window_from": {"$exists": False}},
-                {"$set": {"window_hours": default_hours, "window_from": window_from, "window_to": window_to}},
+                {
+                    "$set": {
+                        "window_hours": default_hours,
+                        "window_from": window_from,
+                        "window_to": window_to,
+                    }
+                },
             )

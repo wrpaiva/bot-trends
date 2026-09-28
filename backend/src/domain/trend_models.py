@@ -1,7 +1,7 @@
 # src/domain/trend_models.py
 
 from dataclasses import dataclass
-from typing import Optional, Literal, Dict, Any
+from typing import Any, Literal
 
 TrendClass = Literal["ESTAVEL", "SUBINDO", "VIRALIZANDO", "PICO_TEMPORARIO", "EM_QUEDA"]
 RiskLevel = Literal["BAIXO", "MEDIO", "ALTO"]
@@ -11,11 +11,11 @@ RiskLevel = Literal["BAIXO", "MEDIO", "ALTO"]
 class TrendInput:
     product_id: str
     title: str
-    category: Optional[str]
+    category: str | None
 
     # marketplace (último ponto observado)
-    price: Optional[float]
-    sold_quantity: Optional[int]
+    price: float | None
+    sold_quantity: int | None
 
     # social (último ponto observado)
     views_24h: int
@@ -23,18 +23,19 @@ class TrendInput:
     mentions_24h: int
 
     # histórico / sinais derivados
-    rank_momentum: float          # 0..1 (melhora de ranking, quando existir)
-    reviews_velocity: float       # delta reviews (quando existir)
-    social_velocity: float        # crescimento social relativo (ex.: 0.25 = +25%)
-    price_volatility: float       # 0..1 (volatilidade relativa)
+    rank_momentum: float  # 0..1 (melhora de ranking, quando existir)
+    reviews_velocity: float  # delta reviews (quando existir)
+    social_velocity: float  # crescimento social relativo (ex.: 0.25 = +25%)
+    price_volatility: float  # 0..1 (volatilidade relativa)
 
-    previous_final_score: Optional[float] = None
+    previous_final_score: float | None = None
 
 
 @dataclass(frozen=True)
 class NumericScoreResult:
     score_0_100: float
-    components: Dict[str, float]
+    # Componentes normalizados + "normalization" (base usada, TIE-21)
+    components: dict[str, float | str]
 
 
 @dataclass(frozen=True)
@@ -57,4 +58,4 @@ class HybridResult:
     risk_level: RiskLevel
     analysis: str
     recommendation: str
-    debug: Dict[str, Any]
+    debug: dict[str, Any]
