@@ -6,6 +6,7 @@ from celery import shared_task
 
 from src.infrastructure.circuit_breaker import breaker_for
 from src.infrastructure.collectors.mercado_livre import MercadoLivreCollector
+from src.infrastructure.collectors.ml_auth import MercadoLivreAuth, MLAuthError
 from src.infrastructure.collectors.tiktok import TikTokApifyCollector
 from src.infrastructure.config import settings
 from src.infrastructure.db.mongo import get_db
@@ -77,34 +78,48 @@ def collect_ml():
     if not category_ids:
         return {"status": "no enabled categories"}
 
-    breaker = _breaker("mercadolivre")
-    if aberto := _circuito_aberto(breaker, "mercadolivre"):
-        return aberto
+    # A API do ML exige OAuth (TIE-41). Sem credencial é config, não falha do
+    # serviço: devolve erro com o motivo e não mexe no circuito.
+    try:
+        auth = MercadoLivreAuth.from_settings(db)
+    except MLAuthError as e:
+        logger.error("Coleta do ML sem credenciais: %s", e)
+        return {"status": "error", "inserted": 0, "errors": 1, "reason": str(e)}
 
-    now = utcnow()
-    count = 0
+    try:
+        breaker = _breaker("mercadolivre")
+        if aberto := _circuito_aberto(breaker, "mercadolivre"):
+            return aberto
 
-    with MercadoLivreCollector(categories=category_ids) as collector:
-        for item in collector.collect():
-            product_id = products.upsert(item)
+        now = utcnow()
+        count = 0
 
-            metrics.insert(
-                {
-                    "ts": now,
-                    "product_id": product_id,
-                    "source": "mercadolivre",
-                    "rank_position": None,
-                    "price": item.get("price"),
-                    "reviews_total": None,
-                    "reviews_delta": 0,
-                    "mentions": 0,
-                    "engagement": 0,
-                    "views": 0,
-                }
-            )
-            count += 1
+        with MercadoLivreCollector(categories=category_ids, auth=auth) as collector:
+            for item in collector.collect():
+                product_id = products.upsert(item)
 
-    return _registra(breaker, _resultado(count, collector.errors))
+                metrics.insert(
+                    {
+                        "ts": now,
+                        "product_id": product_id,
+                        "source": "mercadolivre",
+                        "rank_position": None,
+                        "price": item.get("price"),
+                        "reviews_total": None,
+                        "reviews_delta": 0,
+                        "mentions": 0,
+                        "engagement": 0,
+                        "views": 0,
+                    }
+                )
+                count += 1
+    finally:
+        auth.close()
+
+    resultado = _resultado(count, collector.errors)
+    if collector.auth_error:
+        resultado["reason"] = collector.auth_error
+    return _registra(breaker, resultado)
 
 
 # =========================================================
@@ -154,6 +169,7 @@ def collect_tiktok():
                     "mentions": 1,
                     "engagement": engagement,
                     "views": int(social.get("views", 0) or 0),
+                    "saves": int(social.get("saves", 0) or 0),
                 }
             )
             count += 1

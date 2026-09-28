@@ -111,3 +111,35 @@ def test_pesos_hibridos_invalidos(numeric, llm):
 def test_tolerancia_de_ponto_flutuante():
     # 0.1 + 0.2 != 0.3 em float; não pode reprovar peso legítimo
     ScoreWeights(rank=0.1, reviews=0.2, social=0.3, views=0.1, engagement=0.2, price_stability=0.1)
+
+
+# --- Motor de tendência: velocidade em vez de total -------------------------
+
+
+def test_com_idade_conhecida_usa_views_por_hora_e_nao_o_total():
+    s = NumericScoreStrategy()
+    # Mesmo total de views; o vídeo novo (ritmo alto) tem que pontuar mais
+    velho = s.compute(base_input(views_24h=5_000_000, views_per_hour=200.0, age_hours=25_000.0))
+    novo = s.compute(base_input(views_24h=5_000_000, views_per_hour=100_000.0, age_hours=50.0))
+    assert novo.score_0_100 > velho.score_0_100
+    assert novo.components["view_signal"] == "views_per_hour"
+
+
+def test_sem_idade_mantem_o_calculo_antigo():
+    # Produto do ML (sem data de publicação) e dado legado
+    res = NumericScoreStrategy().compute(base_input())
+    assert res.components["view_signal"] == "total"
+    assert res.score_0_100 == 15.47
+
+
+def test_velocidade_em_escala_log_nao_satura_cedo():
+    s = NumericScoreStrategy()
+    a = s.compute(base_input(views_per_hour=10_000.0, age_hours=10.0)).components["nm_views"]
+    b = s.compute(base_input(views_per_hour=100_000.0, age_hours=10.0)).components["nm_views"]
+    assert 0 < a < b <= 1.0
+
+
+def test_preco_ausente_eh_neutro_e_nao_estabilidade_maxima():
+    # Vídeo do TikTok não tem preço: antes ganhava os 10 pontos de estabilidade
+    res = NumericScoreStrategy().compute(base_input(price=None, price_volatility=0.0))
+    assert res.components["nm_price_stability"] == 0.5

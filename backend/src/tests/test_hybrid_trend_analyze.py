@@ -243,3 +243,88 @@ def test_llm_com_circuito_aberto_nao_impede_a_analise(db, monkeypatch):
     insight = db["trend_insights"].find_one()
     assert insight["llm_score"] == 0.0
     assert "circuito do LLM aberto" in insight["debug"]["llm_error"]
+
+
+# --- Motor de tendência: idade do vídeo -----------------------------------------
+
+
+def test_video_mais_velho_que_o_corte_fica_fora_da_analise(db, monkeypatch):
+    monkeypatch.setattr(mod.settings, "TREND_MAX_AGE_DAYS", 30)
+    db["products"].update_one(
+        {"product_id": "p1"}, {"$set": {"published_at": utcnow() - dt.timedelta(days=40)}}
+    )
+    db["products"].update_one(
+        {"product_id": "p2"}, {"$set": {"published_at": utcnow() - dt.timedelta(days=2)}}
+    )
+
+    res = mod.hybrid_trend_analyze()
+
+    assert res["skipped_too_old"] == 1
+    assert [i["product_id"] for i in db["trend_insights"].find()] == ["p2"]
+    comps = db["trend_insights"].find_one()["debug"]["numeric_components"]
+    assert comps["view_signal"] == "views_per_hour"
+
+
+def test_video_sem_data_segue_no_calculo_antigo(db):
+    mod.hybrid_trend_analyze()
+    comps = db["trend_insights"].find_one()["debug"]["numeric_components"]
+    assert comps["view_signal"] == "total"
+
+
+def test_insight_grava_idade_e_ritmo(db):
+    db["products"].update_many({}, {"$set": {"published_at": utcnow() - dt.timedelta(hours=10)}})
+    db["metrics"].update_many({}, {"$set": {"views": 5000, "engagement": 500}})
+    mod.hybrid_trend_analyze()
+    sinais = db["trend_insights"].find_one()["signals"]
+    # Idade NA LEITURA: métrica de 1 h atrás, vídeo publicado há 10 h → 9 h
+    assert 8.9 <= sinais["age_hours"] <= 9.1
+    assert 5000 / 9.1 <= sinais["views_per_hour"] <= 5000 / 8.9
+
+
+# --- Conteúdo sem produto (TIE-18) ----------------------------------------------
+
+
+def _tiktok(db, pid, title, **campos):
+    db["products"].update_one(
+        {"product_id": pid}, {"$set": {"source": "tiktok", "title": title, **campos}}
+    )
+
+
+def test_video_sem_intencao_comercial_fica_fora_da_analise(db):
+    _tiktok(db, "p1", "eo tiktok fyp #foryou")
+    _tiktok(db, "p2", "Achados da Shopee para a cozinha, link na bio")
+
+    res = mod.hybrid_trend_analyze()
+
+    assert res["skipped_no_product"] == 1
+    assert [i["product_id"] for i in db["trend_insights"].find()] == ["p2"]
+    assert db["trend_insights"].find_one()["commercial_marker"] == "achados"
+
+
+def test_produto_da_loja_do_tiktok_passa_mesmo_sem_texto_de_venda(db):
+    _tiktok(db, "p1", "#fyp #viral", has_shop_product=True)
+    _tiktok(db, "p2", "#fyp #viral")
+
+    mod.hybrid_trend_analyze()
+
+    insight = db["trend_insights"].find_one()
+    assert insight["product_id"] == "p1"
+    assert insight["commercial_marker"] == "tiktok_shop"
+
+
+def test_filtro_nao_se_aplica_a_item_de_marketplace(db):
+    db["products"].update_many({}, {"$set": {"source": "mercadolivre", "title": "Fone"}})
+    res = mod.hybrid_trend_analyze()
+    assert res["skipped_no_product"] == 0
+    assert db["trend_insights"].count_documents({"commercial_marker": None}) == 2
+
+
+def test_filtro_desligado_pela_config_pontua_tudo(db, monkeypatch):
+    monkeypatch.setattr(mod.settings, "TREND_REQUIRE_COMMERCIAL", False)
+    _tiktok(db, "p1", "eo tiktok fyp")
+    _tiktok(db, "p2", "dança nova")
+
+    res = mod.hybrid_trend_analyze()
+
+    assert res["skipped_no_product"] == 0
+    assert db["trend_insights"].count_documents({}) == 2

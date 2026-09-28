@@ -14,8 +14,12 @@ class _FakeCollector:
     itens: list[dict] = []
     erros = 0
 
+    auth_error = None
+    recebido: dict = {}
+
     def __init__(self, **kwargs):
         self.errors = 0
+        _FakeCollector.recebido = kwargs
 
     def __enter__(self):
         return self
@@ -26,12 +30,16 @@ class _FakeCollector:
     def collect(self):
         yield from _FakeCollector.itens
         self.errors = _FakeCollector.erros
+        self.auth_error = _FakeCollector.auth_error
 
 
 @pytest.fixture
 def db(monkeypatch):
-    db = mongomock.MongoClient().db
+    db = mongomock.MongoClient(tz_aware=True).db
     db["categories"].insert_one({"enabled": True, "ml_category_id": "MLB1"})
+    monkeypatch.setattr(tasks_mod.settings, "ML_CLIENT_ID", "123")
+    monkeypatch.setattr(tasks_mod.settings, "ML_CLIENT_SECRET", "segredo")
+    _FakeCollector.auth_error = None
     monkeypatch.setattr(tasks_mod, "get_db", lambda: db)
     monkeypatch.setattr(tasks_mod, "MercadoLivreCollector", _FakeCollector)
     # Sem Redis nos testes: breaker sempre fechado, salvo quando o teste troca
@@ -105,3 +113,37 @@ def test_resultado_da_coleta_alimenta_o_breaker(db, monkeypatch, itens, erros, e
     tasks_mod.collect_ml()
 
     assert breaker.eventos == [evento]
+
+
+# --- OAuth (TIE-41) -------------------------------------------------------------
+
+
+def test_collector_recebe_a_autenticacao(db):
+    _FakeCollector.itens, _FakeCollector.erros = [], 0
+    tasks_mod.collect_ml()
+    assert isinstance(_FakeCollector.recebido["auth"], tasks_mod.MercadoLivreAuth)
+
+
+def test_sem_credenciais_nao_tenta_e_nao_mente(db, monkeypatch):
+    breaker = _BreakerFalso()
+    monkeypatch.setattr(tasks_mod, "_breaker", lambda nome: breaker)
+    monkeypatch.setattr(tasks_mod.settings, "ML_CLIENT_SECRET", None)
+    construiu = []
+    monkeypatch.setattr(tasks_mod, "MercadoLivreCollector", lambda **kw: construiu.append(1))
+
+    res = tasks_mod.collect_ml()
+
+    assert res["status"] == "error" and res["inserted"] == 0
+    assert "ML_CLIENT_SECRET" in res["reason"]
+    # Config faltando não é falha do serviço: não abre o circuito
+    assert construiu == [] and breaker.eventos == []
+
+
+def test_falha_de_token_vira_erro_com_motivo(db):
+    _FakeCollector.itens, _FakeCollector.erros = [], 1
+    _FakeCollector.auth_error = "nenhum token do Mercado Livre gravado"
+
+    res = tasks_mod.collect_ml()
+
+    assert res["status"] == "error"
+    assert res["reason"] == "nenhum token do Mercado Livre gravado"

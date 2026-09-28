@@ -180,3 +180,43 @@ def test_indice_cobre_o_filtro_das_listagens(db, filtro_extra, indice):
     )
     texto = str(plano["queryPlanner"]["winningPlan"])
     assert "IXSCAN" in texto and indice in texto
+
+
+# --- Idioma do vídeo x índice de texto -------------------------------------------
+
+
+def test_produto_com_idioma_nao_suportado_pelo_indice_eh_gravado(db):
+    """
+    O índice de texto usava o campo `language` do documento como idioma do
+    stemming (padrão do Mongo). A coleta do TikTok grava `language` com o idioma
+    do vídeo, e "ar", "ms", "un"... não são suportados: o Mongo recusava a
+    escrita (`language override unsupported`). A v007 desliga esse override.
+    """
+    from src.infrastructure.db.repos import ProductRepo
+
+    repo = ProductRepo(db)
+    for i, idioma in enumerate(["ar", "ms", "un", "eo", "pt", "en"]):
+        repo.upsert(
+            {
+                "source": "tiktok",
+                "source_product_id": f"v{i}",
+                "title": f"Fones bluetooth {idioma}",
+                "language": idioma,
+            }
+        )
+
+    assert db["products"].count_documents({"language": {"$exists": True}}) == 6
+    # O stemming continua em português para todos: "fone" acha "Fones"
+    assert db["products"].count_documents({"$text": {"$search": "fone"}}) == 6
+
+
+def test_v007_eh_idempotente(db):
+    from src.infrastructure.db.migrations.versions.v007_text_index_language_override import (
+        V007TextIndexLanguageOverride,
+    )
+
+    V007TextIndexLanguageOverride().up(db)
+    V007TextIndexLanguageOverride().up(db)
+    info = db["products"].index_information()["ix_products_title_text"]
+    assert info["language_override"] == V007TextIndexLanguageOverride.CAMPO_OVERRIDE
+    assert info["default_language"] == "portuguese"

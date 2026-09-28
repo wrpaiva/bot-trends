@@ -26,10 +26,14 @@ def build_trend_prompt(ti: TrendInput, numeric: NumericScoreResult) -> dict[str,
             "sold_quantity": ti.sold_quantity,
         },
         "social": {
-            "views_24h": ti.views_24h,
-            "engagement_24h": ti.engagement_24h,
-            "mentions_24h": ti.mentions_24h,
+            "views_total": ti.views_24h,
+            "engagement_total": ti.engagement_24h,
+            "mentions": ti.mentions_24h,
+            "age_hours": ti.age_hours,
+            "views_per_hour": ti.views_per_hour,
+            "engagement_per_hour": ti.engagement_per_hour,
             "social_velocity": ti.social_velocity,
+            "has_shop_product": ti.has_shop_product,
         },
         "history": {
             "rank_momentum": ti.rank_momentum,
@@ -56,6 +60,9 @@ def build_trend_prompt(ti: TrendInput, numeric: NumericScoreResult) -> dict[str,
         "Regras:\n"
         "- Se houver pico social sem sustentação, use PICO_TEMPORARIO\n"
         "- Se social_velocity alto e engajamento forte, pode ser VIRALIZANDO\n"
+        "- Tendência é ritmo, não total: use views_per_hour e age_hours; muitas views "
+        "acumuladas em vídeo antigo NÃO são tendência\n"
+        "- has_shop_product=true indica produto à venda no vídeo\n"
         "- Se queda consistente em engajamento/score, use EM_QUEDA\n"
         "- Se faltarem dados críticos, reduza confidence\n\n"
         f"Dados:\n{json.dumps(data, ensure_ascii=False)}"

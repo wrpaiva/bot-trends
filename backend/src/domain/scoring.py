@@ -13,6 +13,18 @@ def clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
+def normalize_log(x: float | None, hi: float) -> float:
+    """0..1 em escala log: ritmo varia em ordens de grandeza (10/h a 200 mil/h)."""
+    if not x or x <= 0 or hi <= 0:
+        return 0.0
+    return clamp(math.log1p(x) / math.log1p(hi), 0.0, 1.0)
+
+
+# Tetos da escala log no modo absoluto (views/h e engajamento/h)
+VIEWS_PER_HOUR_CAP = 100_000.0
+ENGAGEMENT_PER_HOUR_CAP = 10_000.0
+
+
 def normalize_0_1(x: float, lo: float, hi: float) -> float:
     if hi <= lo:
         return 0.0
@@ -77,20 +89,27 @@ class NumericScoreStrategy:
         categoria. Sem ela, faixas fixas (normalização absoluta).
         """
         nm_rank = clamp(ti.rank_momentum, 0.0, 1.0)
-        nm_price_stability = 1.0 - clamp(ti.price_volatility, 0.0, 1.0)
+        # Sem preço (vídeo do TikTok) = neutro; antes ganhava estabilidade máxima
+        nm_price_stability = 0.5 if ti.price is None else 1.0 - clamp(ti.price_volatility, 0.0, 1.0)
+        # Com idade conhecida o sinal é ritmo (views/h); sem ela, o total legado
+        ritmo = ti.views_per_hour is not None
 
         if normalization is not None:
             p = normalization.values
             nm_reviews = p["reviews_velocity"]
             nm_social = p["social_velocity"]
-            nm_views = p["views_24h"]
-            nm_eng = p["engagement_24h"]
+            nm_views = p["views_per_hour"]
+            nm_eng = p["engagement_per_hour"]
             basis = normalization.basis
         else:
             nm_reviews = normalize_0_1(ti.reviews_velocity, 0.0, 50.0)
             nm_social = normalize_0_1(ti.social_velocity, 0.0, 1.0)  # 0..100%+
-            nm_views = normalize_0_1(ti.views_24h, 0.0, 300_000.0)
-            nm_eng = normalize_0_1(ti.engagement_24h, 0.0, 20_000.0)
+            if ritmo:
+                nm_views = normalize_log(ti.views_per_hour, VIEWS_PER_HOUR_CAP)
+                nm_eng = normalize_log(ti.engagement_per_hour, ENGAGEMENT_PER_HOUR_CAP)
+            else:
+                nm_views = normalize_0_1(ti.views_24h, 0.0, 300_000.0)
+                nm_eng = normalize_0_1(ti.engagement_24h, 0.0, 20_000.0)
             basis = "absoluta"
 
         w = self.weights
@@ -115,5 +134,6 @@ class NumericScoreStrategy:
                 "nm_price_stability": nm_price_stability,
                 "score_0_1": score_0_1,
                 "normalization": basis,
+                "view_signal": "views_per_hour" if ritmo else "total",
             },
         )

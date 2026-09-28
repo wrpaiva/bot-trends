@@ -20,6 +20,7 @@ SEGREDOS = {
     "TELEGRAM_BOT_TOKEN": "123456:TELEGRAM-SEGREDO",
     "LLM_API_KEY": "sk-LLM-SEGREDO",
     "API_KEY": "api-key-SEGREDO",
+    "ML_CLIENT_SECRET": "ml-client-SEGREDO",
 }
 
 
@@ -105,6 +106,17 @@ def test_padroes_genericos_de_token_sao_mascarados():
         )
     )
     assert "outro-token" not in texto and "abc.def.ghi" not in texto
+
+
+def test_tokens_oauth_do_mercado_livre_sao_mascarados():
+    # Não estão no settings (moram no Mongo), então só o padrão os pega
+    texto = _saida(
+        lambda log: log.error(
+            "refresh falhou: APP_USR-1234567890-092816-abcdef0123456789 TG-66f1a2b3c4d5e6f7a8b9"
+        )
+    )
+    assert "abcdef0123456789" not in texto and "66f1a2b3c4d5e6f7a8b9" not in texto
+    assert "APP_USR-***" in texto and "TG-***" in texto
 
 
 def test_credencial_dentro_de_traceback_tambem_e_mascarada():

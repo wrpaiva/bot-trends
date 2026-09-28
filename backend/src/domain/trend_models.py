@@ -17,7 +17,8 @@ class TrendInput:
     price: float | None
     sold_quantity: int | None
 
-    # social (último ponto observado)
+    # social: totais ACUMULADOS na última leitura (o nome "24h" é histórico).
+    # Não entram no score quando a idade é conhecida — ver views_per_hour.
     views_24h: int
     engagement_24h: int
     mentions_24h: int
@@ -29,6 +30,13 @@ class TrendInput:
     price_volatility: float  # 0..1 (volatilidade relativa)
 
     previous_final_score: float | None = None
+
+    # Motor de tendência: ritmo desde a publicação (None = idade desconhecida,
+    # ex.: produto do ML, ou vídeo coletado antes de gravarmos a data)
+    age_hours: float | None = None
+    views_per_hour: float | None = None
+    engagement_per_hour: float | None = None
+    has_shop_product: bool = False
 
 
 @dataclass(frozen=True)

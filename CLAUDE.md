@@ -117,7 +117,8 @@ em `apps/worker/main.py` (`task_routes`), garanta que o worker consome essa fila
 `include=` do `Celery(...)`. Sem isso a task é publicada e nunca executa.
 
 **Nova migração:** crie `src/infrastructure/db/migrations/versions/vNNN_<descricao>.py` seguindo
-`migration_base.Migration`, registre em `versions/__init__.py`. Migrações são idempotentes e
+`migration_base.Migration`, registre em `migrations/__init__.py` (`get_migrations()`; o
+`versions/__init__.py` é vazio) e na lista esperada de `test_imports_smoke.py`. Migrações são idempotentes e
 protegidas por lock distribuído — nunca edite uma migração já aplicada, crie a próxima.
 
 **Novo collector:** implemente em `src/infrastructure/collectors/`, use context manager
@@ -142,12 +143,19 @@ valores dourados de `src/tests/test_scoring.py` no mesmo commit, conscientemente
 
 Não são "coisas a arrumar agora", são coisas que vão te morder se você não souber:
 
-1. **A API do Mercado Livre não é mais pública.** `/highlights` devolve 401
-   `unspecified_token`, `/sites/MLB/search` devolve 403 e `/items` devolve 401. O
-   `MercadoLivreCollector` não tem nenhum suporte a OAuth — só lê `ML_BASE_URL` e `ML_SITE_ID`.
-   **Nenhuma coleta do ML funciona hoje**, e a Fase 2 inteira depende disso (TIE-41).
+1. **A API do Mercado Livre não é mais pública — e o ML não tem client credentials.**
+   `/highlights`, `/sites/MLB/search` e `/items` exigem `Bearer`. O OAuth está implementado
+   (TIE-41, `collectors/ml_auth.py`), mas **só funciona depois que alguém cria o app no ML e roda
+   `python -m apps.ml_auth.main` uma vez** (fluxo `authorization_code` no navegador). Até lá
+   `collect_ml` devolve `status: error` com o motivo em `reason`. **Ainda não confirmado com
+   token real:** se `/highlights` responde a token de usuário comum; se não responder, a origem
+   do collector muda e a Fase 2 fica maior. O refresh token é de **uso único**: nunca renove
+   fora de `MercadoLivreAuth` (ele grava o par novo com compare-and-set no Mongo, `ml_oauth`);
+   um refresh "de teste" à mão invalida o token do worker.
 2. **`rank_momentum` e `reviews_velocity` estão hardcoded em `0.0`** em `tasks_trend.py`,
-   ou seja 35% do score numérico é sempre zero (TIE-16).
+   ou seja 35% do score numérico é sempre zero (TIE-16). E boa parte do topo do ranking é
+   conteúdo sem produto (dança, meme de `#fyp`) — resolvido pelo filtro comercial (ver "Já
+   corrigido"); o vínculo TikTok ↔ produto do ML continua pendente (TIE-18).
 3. **`MONGO_PASSWORD` só vale na primeira subida do volume.** `MONGO_INITDB_ROOT_PASSWORD` é
    lido apenas quando `/data/db` está vazio. Trocar a senha no `.env` com o volume
    `trends_mongo_data` já existente dá `storedKey mismatch` e o healthcheck nunca fica verde.
@@ -350,10 +358,41 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   **O `mongodump` 100.x escreve o namespace entre crases** (`` done dumping `trends.metrics` ``):
   a 1ª versão do script assumia sem crase e gerava gabarito vazio — o stub do teste usa o
   formato real. Destino fora da máquina ainda depende de escolha do usuário (TIE-35).
+- **O score media popularidade, não tendência.** `views_24h`/`engagement_24h` eram o TOTAL
+  acumulado do vídeo (o nome "24h" é histórico e ficou), `social_velocity` era 0 em 84% dos
+  insights e o preço ausente dava 10 pontos de graça: o topo era um vídeo de 4 anos. Agora
+  `src/domain/trend_signals.py` calcula views/engajamento **por hora de vida** (piso 6 h) e
+  aceleração entre leituras (piso de 1.000 views; leitura única = 0), vídeo > 30 dias sai da
+  análise, preço ausente = 0,5. A coleta grava `published_at`, `has_shop_product`, `language` e
+  `saves`; vídeos antigos ganham a data via `apps.backfill.tiktok_published`. **Duas ideias
+  foram testadas com os 501 vídeos reais e reprovadas** — frescor como sinal social (punha vídeo
+  de 0 dia com 61 views/h no topo) e aceleração sem piso de volume (100→365 views venciam 226 mil
+  views/h no percentil). Mexeu no motor? Revalide com dados reais, não só com os testes.
 - **Métricas do TikTok sempre zeradas.** O `clockworks~tiktok-scraper` passou a devolver
   `playCount`/`diggCount`/`commentCount`/`shareCount` no primeiro nível do item (`stats` vem
   `None`), e `_normalize_item` só lia `stats`. Agora aceita os dois formatos; o teste usa um
   item real do actor. Se o actor mudar de novo, o sintoma é `views`/`engagement` = 0.
+- **Conteúdo sem produto disputava o ranking.** `src/domain/commercial.py` decide se um vídeo
+  do TikTok vende algo: produto do TikTok Shop **ou** marca de venda no texto (loja, "link na
+  bio", "comenta QUERO", R$, código de produto da Shopee, "achadinho"). Sem isso, fica fora da
+  análise (`TREND_REQUIRE_COMMERCIAL`, `skipped_no_product`; insight grava `commercial_marker`).
+  **Não troque por `has_shop_product` puro:** nos 501 vídeos reais ele perderia 79 dos 97 das
+  hashtags de compra (afiliado da Shopee manda para a bio). **`isAd` não serve**: marcou 21
+  vídeos de `#fyp` sem produto. Texto normalizado com leet (`L!nks`, `Bl0`), porque afiliado
+  escreve assim para escapar do filtro da plataforma. Mexeu nos marcadores? Revalide com os
+  vídeos reais (os datasets da Apify ainda têm os 501) (TIE-18, parte 1).
+- **Collector do ML sem autenticação.** Agora `MercadoLivreAuth` (Bearer, renovação 5 min antes
+  de vencer, uma renovação por coleta em 401, `invalid_grant` relê o Mongo antes de desistir —
+  outro worker pode ter renovado) e `MLAuthError` interrompe a coleta inteira com `auth_error`.
+  Sem `ML_CLIENT_ID`/`ML_CLIENT_SECRET` a task não mexe no circuit breaker (é config, não falha
+  do serviço). `ML_CLIENT_SECRET` está na redação do log, e `APP_USR-...`/`TG-...` são mascarados
+  por padrão — os tokens moram no Mongo, não no `settings` (TIE-41).
+- **Índice de texto recusava vídeo em árabe.** O índice da v005 usava o `language_override`
+  padrão do Mongo: o campo `language` do documento escolhe o stemming. A coleta passou a gravar
+  `language` com o idioma do vídeo, e idioma não suportado (`ar`, `ms`, `un`...) fazia a escrita
+  falhar com `language override unsupported` — derrubou o backfill em produção e derrubaria a
+  coleta. A v007 aponta o override para um campo que nunca é gravado. **O mongomock não
+  reproduz isso**: teste de índice de texto vai em `test_search.py`, contra Mongo real.
 
 ---
 

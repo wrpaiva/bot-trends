@@ -83,6 +83,9 @@ def test_mesmas_metricas_mesma_chave():
     "mudanca",
     [
         {"views_24h": 1001},
+        {"views_per_hour": 55.0},
+        {"age_hours": 30.0},
+        {"has_shop_product": True},
         {"engagement_24h": 101},
         {"price": 11.0},
         {"title": "Fone 2"},
@@ -136,7 +139,12 @@ def test_score_numerico_sempre_recalculado_no_acerto():
     com = engine.run(
         _ti(),
         Normalization(
-            {"views_24h": 1, "engagement_24h": 1, "social_velocity": 1, "reviews_velocity": 1},
+            {
+                "views_per_hour": 1,
+                "engagement_per_hour": 1,
+                "social_velocity": 1,
+                "reviews_velocity": 1,
+            },
             "categoria",
         ),
     )

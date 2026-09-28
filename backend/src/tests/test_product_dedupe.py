@@ -131,3 +131,25 @@ def test_url_com_query_string_nao_muda_o_id(normalize):
 
 def test_video_sem_id_nem_url_valida_nao_vira_produto(normalize):
     assert normalize({"text": "sem nada"}) is None
+
+
+# --- Motor de tendência: data de publicação -----------------------------------
+
+
+def test_upsert_grava_publicacao_e_loja(repo):
+    import datetime as dt
+
+    pub = dt.datetime(2026, 9, 24, 20, 28, 36, tzinfo=dt.UTC)
+    repo.upsert(_item(source="tiktok", published_at=pub, has_shop_product=True))
+    doc = repo.col.find_one()
+    assert doc["published_at"].replace(tzinfo=dt.UTC) == pub
+    assert doc["has_shop_product"] is True
+
+
+def test_coleta_sem_data_nao_apaga_a_data_ja_gravada(repo):
+    import datetime as dt
+
+    pub = dt.datetime(2026, 9, 24, tzinfo=dt.UTC)
+    repo.upsert(_item(source="tiktok", published_at=pub))
+    repo.upsert(_item(source="tiktok", published_at=None))
+    assert repo.col.find_one()["published_at"] is not None
