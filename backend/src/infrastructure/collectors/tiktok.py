@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 import time
@@ -18,6 +19,20 @@ logger = logging.getLogger(__name__)
 
 # Id numérico do vídeo dentro da URL: .../@autor/video/7075778590062988546
 _VIDEO_ID_NA_URL = re.compile(r"/video/(\d+)")
+
+
+def parse_published_at(item: dict[str, Any]) -> dt.datetime | None:
+    """Data de publicação do vídeo, aware em UTC (createTimeISO ou epoch)."""
+    iso = item.get("createTimeISO")
+    if iso:
+        try:
+            return dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(dt.UTC)
+        except ValueError:
+            pass
+    epoch = item.get("createTime")
+    if isinstance(epoch, int | float) and epoch > 0:
+        return dt.datetime.fromtimestamp(epoch, dt.UTC)
+    return None
 
 
 class TikTokApifyCollector:
@@ -182,6 +197,10 @@ class TikTokApifyCollector:
         return {
             "source": "tiktok",
             "source_product_id": str(vid),
+            # Motor de tendência: ritmo = views / idade do vídeo
+            "published_at": parse_published_at(item),
+            "has_shop_product": bool(item.get("hasTikTokShopProduct")),
+            "language": item.get("textLanguage"),
             "title": (item.get("text") or item.get("desc") or "")[:200],
             "permalink": permalink,
             "category": None,
@@ -192,6 +211,7 @@ class TikTokApifyCollector:
                 "likes": int(likes or 0),
                 "comments": int(comments or 0),
                 "shares": int(shares or 0),
+                "saves": int(item.get("collectCount") or 0),
                 "author": author.get("name") or author.get("nickName"),
             },
         }

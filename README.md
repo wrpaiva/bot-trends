@@ -5,9 +5,10 @@
 > Motor híbrido de detecção de tendências: coleta Mercado Livre + TikTok, calcula um score
 > matemático + LLM, expõe rankings via API REST e alerta no Telegram.
 
-> ⚠️ **Estado atual (2026-09):** a API do Mercado Livre passou a exigir OAuth e o projeto ainda
-> não autentica (TIE-41) — **a coleta do ML não funciona hoje**. A coleta do TikTok, a análise,
-> a API, o dashboard e os alertas funcionam.
+> ⚠️ **Estado atual (2026-09):** a API do Mercado Livre passou a exigir OAuth. O projeto já
+> autentica (TIE-41), mas **a coleta do ML só funciona depois de criar o app no ML e autorizar
+> uma vez** (ver "Autorizando o Mercado Livre"). A coleta do TikTok, a análise, a API, o
+> dashboard e os alertas funcionam.
 
 ---
 
@@ -106,15 +107,39 @@ docker compose --profile dev up           # + dashboard em hot-reload
 Portas ocupadas por outro projeto? Troque `API_HOST_PORT`, `WEB_HOST_PORT`, `MONGO_HOST_PORT`,
 `REDIS_HOST_PORT` e `WEB_DEV_HOST_PORT` no `.env` da raiz. Mongo e Redis só escutam em `127.0.0.1`.
 
-### 3️⃣ Migrações e categorias (nesta ordem)
+### 3️⃣ Migrações, categorias e backfill (nesta ordem)
 
 ```bash
 docker compose run --rm api python -m apps.migrate.main      # índices e collections
 docker compose run --rm api python -m apps.bootstrap.main    # categorias padrão
+# Uma vez, se já havia vídeos coletados: data de publicação a partir dos datasets
+# antigos da Apify (só leitura, não gasta crédito). Sem ela, eles ficam no cálculo antigo.
+docker compose run --rm api python -m apps.backfill.tiktok_published --dry-run
+docker compose run --rm api python -m apps.backfill.tiktok_published
 ```
 
+**Autorizando o Mercado Livre.** A API do ML não é mais pública e só aceita OAuth com
+autorização do usuário (não há client credentials). Uma vez:
+
+1. Crie um app em [developers.mercadolivre.com.br](https://developers.mercadolivre.com.br/)
+   com o escopo `offline_access` e cadastre uma redirect URI `https` (pode ser uma que nem
+   carrega, ex.: `https://localhost/ml/callback`).
+2. Preencha `ML_CLIENT_ID`, `ML_CLIENT_SECRET` e `ML_REDIRECT_URI` (idêntica à do app) no
+   `backend/.env`.
+3. Rode a autorização, abra a URL impressa, autorize e cole de volta a URL da barra de endereço:
+
+```bash
+docker compose run --rm -it api python -m apps.ml_auth.main    # --sem-pkce se o app não usar PKCE
+docker compose run --rm api python -m apps.ml_auth.main --status
+```
+
+O par de tokens fica no Mongo (`ml_oauth`) e o worker o renova sozinho (o access token dura
+6 h; o refresh token é de uso único e é regravado a cada renovação). Sem credenciais,
+`collect_ml` devolve `status: error` com o motivo em `reason`; se o ML recusar o refresh token
+(`invalid_grant`), a mensagem pede para rodar a autorização de novo.
+
 O bootstrap é idempotente: rodar de novo atualiza nomes, mas não desabilita o que você
-habilitou nem duplica categorias. Para buscar a árvore real do ML (exige o token da TIE-41):
+habilitou nem duplica categorias. Para buscar a árvore real do ML (exige a autorização acima):
 `BOOTSTRAP_FETCH_ML_CATEGORIES=true docker compose run --rm api python -m apps.bootstrap.main`.
 
 **Escolhendo o que coletar.** Toda categoria nasce desabilitada — enquanto nada for habilitado,
@@ -198,10 +223,25 @@ não sobe). Cada insight grava os pesos usados em `score_weights`.
 |---|---|---|
 | `rank_momentum` | 0,20 | já vem em 0–1 |
 | `reviews_velocity` | 0,15 | percentil na categoria (ou 0–50 reviews) |
-| `social_velocity` | 0,25 | percentil na categoria (ou 0–100% de crescimento) |
-| `views_24h` | 0,15 | percentil na categoria (ou 0–300 mil no modo absoluto) |
-| `engagement_24h` | 0,15 | percentil na categoria (ou 0–20 mil no modo absoluto) |
-| estabilidade de preço | 0,10 | `1 − price_volatility` |
+| aceleração (`social_velocity`) | 0,25 | quanto o ritmo entre as 2 últimas leituras supera o ritmo médio de vida; 0 com leitura única ou abaixo de 1.000 views |
+| views por hora de vida | 0,15 | percentil na categoria (ou escala log até 100 mil/h no modo absoluto) |
+| engajamento por hora de vida | 0,15 | percentil na categoria (ou escala log até 10 mil/h) |
+| estabilidade de preço | 0,10 | `1 − price_volatility`; sem preço (TikTok) = 0,5, neutro |
+
+**Tendência é ritmo, não total.** Para vídeos com data de publicação, views e engajamento entram
+como **ritmo por hora de vida** (piso de `TREND_MIN_AGE_HOURS`, 6 h, para vídeo de minutos não
+explodir a métrica), e vídeo com mais de `TREND_MAX_AGE_DAYS` (30) dias **fica fora da análise** —
+não é tendência. Antes o score usava o total acumulado e o topo era um vídeo de 4 anos com 96 mi de
+views. Produtos sem data de publicação (Mercado Livre, vídeos antigos sem backfill) seguem no
+cálculo por total. Cada insight grava os sinais usados em `signals`.
+
+**Só conteúdo que vende (`TREND_REQUIRE_COMMERCIAL`).** Vídeo do TikTok sem sinal de venda fica
+fora da análise: precisa ter produto do TikTok Shop ou, no texto, loja (Shopee, Shein, Amazon,
+Mercado Livre...), "link na bio", "comenta QUERO", preço em R$, código de produto, "achadinho",
+"comprei". Nos 501 vídeos reais, `hasTikTokShopProduct` sozinho perderia 79 dos 97 vídeos das
+hashtags de compra (afiliado da Shopee manda para a bio), e o texto não casou nenhum dos 404
+vídeos de `#fyp`. A task devolve `skipped_no_product` e cada insight grava em
+`commercial_marker` o que o fez contar como produto. `false` volta a pontuar tudo.
 
 **Normalização (`SCORE_NORMALIZATION`).** Com `percentile` (padrão), views, engajamento,
 `social_velocity` e `reviews_velocity` viram o percentil do produto **dentro da própria

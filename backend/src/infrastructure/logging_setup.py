@@ -32,13 +32,22 @@ from src.infrastructure.config import settings
 HANDLER_MARK = "_trends_handler"
 
 # Campos do settings cujo valor nunca pode aparecer em log
-SECRET_FIELDS = ("API_KEY", "APIFY_TOKEN", "TELEGRAM_BOT_TOKEN", "LLM_API_KEY")
+SECRET_FIELDS = (
+    "API_KEY",
+    "APIFY_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "LLM_API_KEY",
+    "ML_CLIENT_SECRET",
+)
 URI_FIELDS = ("MONGO_URI", "REDIS_URL")
 
 _PADROES = [
     (re.compile(r"(://[^:/@\s]*:)[^@\s]+@"), r"\1***@"),  # user:senha@host
     (re.compile(r"(/bot)\d+:[\w-]+"), r"\1***"),  # Telegram
     (re.compile(r"(Bearer\s+)[^\s\"']+", re.IGNORECASE), r"\1***"),
+    # Tokens OAuth do Mercado Livre (access `APP_USR-...`, refresh `TG-...`):
+    # não estão no settings, moram no Mongo e mudam a cada renovação (TIE-41)
+    (re.compile(r"\b(APP_USR|TG)-[\w-]{8,}"), r"\1-***"),
     (
         re.compile(r"((?:token|api_key|apikey|key|password|secret)=)[^&\s\"']+", re.IGNORECASE),
         r"\1***",

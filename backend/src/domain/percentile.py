@@ -20,8 +20,20 @@ from dataclasses import dataclass
 from .trend_models import TrendInput
 
 # Métricas de volume, cuja escala depende da categoria. rank_momentum já vem
-# em 0..1 e a estabilidade de preço é relativa por construção.
-PERCENTILE_METRICS = ("views_24h", "engagement_24h", "social_velocity", "reviews_velocity")
+# em 0..1 e a estabilidade de preço é relativa por construção. Views e
+# engajamento entram como RITMO (por hora desde a publicação); sem idade
+# conhecida valem 0 — não há como provar que estão subindo.
+PERCENTILE_METRICS = (
+    "views_per_hour",
+    "engagement_per_hour",
+    "social_velocity",
+    "reviews_velocity",
+)
+
+
+def _valor(ti: TrendInput, metrica: str) -> float:
+    v = getattr(ti, metrica)
+    return 0.0 if v is None else float(v)
 
 
 def percentile_rank(value: float, population: list[float]) -> float:
@@ -61,7 +73,7 @@ class PercentileContext:
 
         return Normalization(
             values={
-                m: percentile_rank(getattr(ti, m), [getattr(x, m) for x in pool])
+                m: percentile_rank(_valor(ti, m), [_valor(x, m) for x in pool])
                 for m in PERCENTILE_METRICS
             },
             basis=basis,

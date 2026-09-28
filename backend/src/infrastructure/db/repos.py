@@ -62,6 +62,10 @@ class ProductRepo:
                 "schema_version": 3,
             },
         }
+        # Só grava quando veio: uma coleta sem o dado não apaga o que já existe
+        for campo in ("published_at", "has_shop_product", "language"):
+            if item.get(campo) is not None:
+                update["$set"][campo] = item[campo]
 
         # Atômico: ler-e-depois-gravar deixava a coleta que perdia uma corrida
         # devolver um UUID que nunca foi gravado — métricas órfãs, série partida.

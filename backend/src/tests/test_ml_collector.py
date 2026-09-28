@@ -85,3 +85,88 @@ def test_json_invalido_conta_como_erro_e_nao_propaga():
 def test_teto_de_requisicoes_vem_da_config(monkeypatch):
     monkeypatch.setattr(ml_mod.settings, "ML_MAX_REQUESTS_PER_MINUTE", 120)
     assert MercadoLivreCollector(["MLB1"])._limiter.interval == 0.5
+
+
+# --- OAuth (TIE-41) -------------------------------------------------------------
+
+
+class _AuthFalso:
+    """Token atual e renovações pedidas; `falha` simula token impossível de obter."""
+
+    def __init__(self, token="APP_USR-t1", falha=None):
+        self.token = token
+        self.falha = falha
+        self.renovacoes: list[str | None] = []
+
+    def access_token(self):
+        if self.falha:
+            raise ml_mod.MLAuthError(self.falha)
+        return self.token
+
+    def refresh(self, stale=None):
+        self.renovacoes.append(stale)
+        self.token = "APP_USR-t2"
+        return self.token
+
+
+def _com_auth(handler, auth, categorias=("MLB1",)) -> MercadoLivreCollector:
+    c = _collector(handler, categorias)
+    c.auth = auth
+    return c
+
+
+def test_toda_chamada_leva_o_bearer():
+    headers = []
+
+    def handler(request):
+        headers.append(request.headers.get("Authorization"))
+        return _handler_ok(request)
+
+    with _com_auth(handler, _AuthFalso()) as c:
+        assert len(list(c.collect())) == 1
+    assert headers == ["Bearer APP_USR-t1"] * 2
+
+
+def test_401_renova_o_token_uma_vez_e_repete_a_chamada():
+    def handler(request):
+        if request.headers["Authorization"] == "Bearer APP_USR-t1":
+            return httpx.Response(401, json={"message": "invalid access token"})
+        return _handler_ok(request)
+
+    auth = _AuthFalso()
+    with _com_auth(handler, auth) as c:
+        itens = list(c.collect())
+
+    assert len(itens) == 1 and c.errors == 0
+    assert auth.renovacoes == ["APP_USR-t1"]
+
+
+def test_401_depois_de_renovar_conta_erro_sem_entrar_em_loop():
+    chamadas = []
+
+    def handler(request):
+        chamadas.append(request.headers["Authorization"])
+        return httpx.Response(401, json={"message": "invalid access token"})
+
+    auth = _AuthFalso()
+    with _com_auth(handler, auth) as c:
+        assert list(c.collect()) == []
+
+    assert chamadas == ["Bearer APP_USR-t1", "Bearer APP_USR-t2"]
+    assert c.errors == 1 and len(auth.renovacoes) == 1
+
+
+def test_sem_token_a_coleta_para_e_diz_o_motivo():
+    chamadas = []
+
+    def handler(request):
+        chamadas.append(request)
+        return _handler_ok(request)
+
+    auth = _AuthFalso(falha="nenhum token do Mercado Livre gravado")
+    with _com_auth(handler, auth, categorias=("MLB1", "MLB2", "MLB3")) as c:
+        assert list(c.collect()) == []
+
+    # Não insiste categoria a categoria: sem token, nenhuma vai funcionar
+    assert chamadas == [] and c.errors == 1
+    assert "nenhum token" in c.auth_error

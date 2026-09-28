@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from src.infrastructure.collectors.http_policy import RateLimiter, retry_transient
+from src.infrastructure.collectors.ml_auth import MercadoLivreAuth, MLAuthError
 from src.infrastructure.config import settings
 from src.infrastructure.logging_setup import http_log_hooks
 
@@ -24,6 +25,11 @@ class MercadoLivreCollector:
     Config (via `settings`):
       ML_BASE_URL (default: https://api.mercadolibre.com)
       ML_SITE_ID  (default: MLB)
+
+    Autenticação (TIE-41): a API deixou de ser pública. Com `auth`, toda
+    chamada leva `Authorization: Bearer`; um 401 renova o token uma vez por
+    coleta e repete a chamada. Sem token utilizável (`MLAuthError`) a coleta
+    para inteira e `auth_error` diz por quê — nenhuma categoria funcionaria.
 
     Features:
       - Retry só em erro transitório (429/5xx/timeout), respeitando Retry-After
@@ -45,7 +51,11 @@ class MercadoLivreCollector:
         max_items_per_category: int = 20,
         max_requests_per_minute: int | None = None,
         transport: httpx.BaseTransport | None = None,
+        auth: MercadoLivreAuth | None = None,
     ):
+        self.auth = auth
+        self.auth_error: str | None = None
+        self._renovou = False
         self.base_url = settings.ML_BASE_URL.rstrip("/")
         self.site_id = settings.ML_SITE_ID
         self.categories = [c for c in categories if c]
@@ -78,11 +88,24 @@ class MercadoLivreCollector:
         return False
 
     def _get(self, url: str) -> httpx.Response:
-        """GET com teto de taxa; levanta HTTPStatusError em resposta de erro."""
-        self._limiter.wait()
-        r = self.client.get(url)
+        """
+        GET com teto de taxa e Bearer; levanta HTTPStatusError em resposta de
+        erro e MLAuthError sem token utilizável.
+        """
+        token = self.auth.access_token() if self.auth else None
+        r = self._get_com(url, token)
+        # 401 com token: venceu ou foi revogado antes do previsto. Renova uma
+        # vez por coleta — 401 com token recém-renovado não é problema de token.
+        if r.status_code == 401 and self.auth is not None and not self._renovou:
+            self._renovou = True
+            r = self._get_com(url, self.auth.refresh(stale=token))
         r.raise_for_status()
         return r
+
+    def _get_com(self, url: str, token: str | None) -> httpx.Response:
+        self._limiter.wait()
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        return self.client.get(url, headers=headers)
 
     @retry_transient(attempts=3, min_s=1, max_s=10)
     def _get_highlights_item_ids(self, category_id: str) -> list[str]:
@@ -175,6 +198,9 @@ class MercadoLivreCollector:
             try:
                 item_ids = self._get_highlights_item_ids(cat)
                 logger.info(f"Categoria {cat}: {len(item_ids)} items encontrados")
+            except MLAuthError as e:
+                self._sem_token(e)
+                return
             except (httpx.HTTPError, json.JSONDecodeError) as e:
                 logger.warning(f"Falha ao buscar highlights da categoria {cat}: {e}")
                 self.errors += 1
@@ -186,6 +212,9 @@ class MercadoLivreCollector:
 
                 try:
                     items = self._get_items_batch(batch_ids)
+                except MLAuthError as e:
+                    self._sem_token(e)
+                    return
                 except (httpx.HTTPError, json.JSONDecodeError) as e:
                     logger.warning(f"Falha ao buscar batch de items: {e}")
                     self.errors += 1
@@ -196,6 +225,11 @@ class MercadoLivreCollector:
                     total_collected += 1
 
         logger.info(f"Coleta finalizada: {total_collected} items, {self.errors} erros")
+
+    def _sem_token(self, e: MLAuthError) -> None:
+        self.errors += 1
+        self.auth_error = str(e)
+        logger.error("Coleta do ML interrompida: %s", e)
 
     def close(self) -> None:
         """Fecha o client HTTP de forma segura."""

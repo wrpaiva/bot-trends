@@ -4,6 +4,8 @@ O APIFY_TOKEN não pode aparecer em URL nenhuma: quando a Apify responde erro,
 o HTTPStatusError carrega a URL e ela vai parar no log do worker (TIE-3).
 """
 
+import datetime as dt
+
 import httpx
 import pytest
 
@@ -163,6 +165,7 @@ def test_normaliza_contadores_no_primeiro_nivel():
         "likes": 25200,
         "comments": 297,
         "shares": 524,
+        "saves": 0,
         "author": "mara.lazeez",
     }
 
@@ -179,3 +182,32 @@ def test_normaliza_formato_antigo_com_stats():
 def test_normaliza_item_sem_contadores():
     social = _normalize({"id": "v1"})["social"]
     assert (social["views"], social["likes"], social["comments"], social["shares"]) == (0, 0, 0, 0)
+
+
+# --- Motor de tendência: data de publicação e sinais de produto --------------
+
+
+def test_normaliza_data_de_publicacao_salvamentos_e_loja():
+    item = {
+        **ITEM_APIFY_ATUAL,
+        "createTimeISO": "2026-09-24T20:28:36.000Z",
+        "createTime": 1790281716,
+        "collectCount": 42,
+        "hasTikTokShopProduct": True,
+        "textLanguage": "pt",
+    }
+    n = _normalize(item)
+    assert n["published_at"] == dt.datetime(2026, 9, 24, 20, 28, 36, tzinfo=dt.UTC)
+    assert n["social"]["saves"] == 42
+    assert n["has_shop_product"] is True
+    assert n["language"] == "pt"
+
+
+def test_publicacao_pelo_epoch_quando_nao_ha_iso():
+    n = _normalize({"id": "v1", "createTime": 1790281716})
+    assert n["published_at"] == dt.datetime(2026, 9, 24, 20, 28, 36, tzinfo=dt.UTC)
+
+
+def test_sem_data_de_publicacao_fica_none():
+    n = _normalize({"id": "v1"})
+    assert n["published_at"] is None and n["has_shop_product"] is False

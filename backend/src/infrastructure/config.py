@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     ML_SITE_ID: str = "MLB"
     # Teto de requisições por minuto de cada collector (0 desliga)
     ML_MAX_REQUESTS_PER_MINUTE: int = 60
+    # OAuth (TIE-41): a API do ML deixou de ser pública. Credenciais do app
+    # criado em developers.mercadolivre.com.br; o REDIRECT_URI tem de ser
+    # idêntico ao cadastrado no app. O token em si mora no Mongo (`ml_oauth`),
+    # obtido uma vez com `python -m apps.ml_auth.main` e renovado sozinho.
+    ML_CLIENT_ID: str | None = None
+    ML_CLIENT_SECRET: str | None = None
+    ML_REDIRECT_URI: str | None = None
+    ML_AUTH_URL: str = "https://auth.mercadolivre.com.br/authorization"
 
     # Bootstrap de categorias
     BOOTSTRAP_FETCH_ML_CATEGORIES: bool = False
@@ -87,7 +95,14 @@ class Settings(BaseSettings):
     # "absolute" volta às faixas fixas. Categoria com menos que MIN_GROUP
     # produtos usa o pool global; pool global pequeno demais → absoluto.
     SCORE_NORMALIZATION: Literal["percentile", "absolute"] = "percentile"
+    # Motor de tendência: vídeo mais velho que isso não é tendência e fica fora
+    # da análise; o piso de idade evita que vídeo de minutos exploda views/h
+    TREND_MAX_AGE_DAYS: int = Field(default=30, ge=1)
+    TREND_MIN_AGE_HOURS: float = Field(default=6.0, gt=0)
     SCORE_PERCENTILE_MIN_GROUP: int = Field(default=5, ge=2)
+    # TIE-18: vídeo do TikTok sem sinal de venda (loja, "link na bio", preço...)
+    # fica fora da análise. false volta a pontuar tudo.
+    TREND_REQUIRE_COMMERCIAL: bool = True
 
     # LLM
     LLM_BASE_URL: str | None = None

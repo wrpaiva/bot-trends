@@ -8,10 +8,12 @@ from celery import shared_task
 
 from src.application.trend_engine import HybridTrendEngine
 from src.domain.alerting import decide_alert
+from src.domain.commercial import commercial_marker
 from src.domain.interfaces import LLMClient
 from src.domain.percentile import PercentileContext
 from src.domain.scoring import NumericScoreStrategy
 from src.domain.trend_models import LLMResult, TrendInput
+from src.domain.trend_signals import Reading, compute_signals, is_too_old
 from src.infrastructure.circuit_breaker import BreakerLLMClient, breaker_for
 from src.infrastructure.config import settings
 from src.infrastructure.db.alert_repos import AlertStateRepo
@@ -20,7 +22,7 @@ from src.infrastructure.db.trend_repos import TrendInsightRepo
 from src.infrastructure.llm.cache import RedisLLMCache
 from src.infrastructure.llm.openai_compatible import OpenAICompatibleLLMClient
 from src.infrastructure.telegram.notifier import TelegramError, TelegramNotifier
-from src.infrastructure.utils.datetime_utils import utcnow
+from src.infrastructure.utils.datetime_utils import ensure_utc, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -94,13 +96,42 @@ def _calc_price_volatility(metrics):
     return min(float((mx - mn) / mn), 1.0)
 
 
-def _build_input(db, product_id: str, since: dt.datetime) -> tuple[TrendInput, list] | None:
-    """TrendInput + fontes de um produto, ou None se faltar produto/métricas."""
+# Sentinelas: vídeo mais velho que TREND_MAX_AGE_DAYS (não é tendência) e
+# vídeo sem intenção comercial (dança, meme — TIE-18)
+VELHO = object()
+SEM_PRODUTO = object()
+
+
+def _build_input(db, product_id: str, since: dt.datetime):
+    """
+    (TrendInput, fontes, sinais | None, marcador comercial | None), `VELHO`,
+    `SEM_PRODUTO`, ou None se faltar produto ou métricas. Com data de
+    publicação, views e engajamento viram ritmo (por hora de vida) e
+    `social_velocity` vira aceleração/frescor; sem ela, fica o cálculo antigo
+    (produto do ML, vídeo coletado antes de gravarmos a data).
+    """
     product = db["products"].find_one(
-        {"product_id": product_id}, {"_id": 0, "title": 1, "category": 1}
+        {"product_id": product_id},
+        {
+            "_id": 0,
+            "source": 1,
+            "title": 1,
+            "category": 1,
+            "published_at": 1,
+            "has_shop_product": 1,
+        },
     )
     if not product:
         return None
+
+    # Só vídeo do TikTok passa pelo filtro: item de marketplace já é produto
+    marcador = None
+    if product.get("source") == "tiktok":
+        marcador = commercial_marker(
+            product.get("title"), has_shop_product=bool(product.get("has_shop_product"))
+        )
+        if marcador is None and settings.TREND_REQUIRE_COMMERCIAL:
+            return SEM_PRODUTO
 
     metrics = list(
         db["metrics"]
@@ -114,6 +145,23 @@ def _build_input(db, product_id: str, since: dt.datetime) -> tuple[TrendInput, l
     last = metrics[0]
     sources = list({m.get("source") for m in metrics if m.get("source")})
 
+    sinais = None
+    if product.get("published_at"):
+        sinais = compute_signals(
+            [
+                Reading(
+                    ts=ensure_utc(m["ts"]),
+                    views=int(m.get("views") or 0),
+                    engagement=int(m.get("engagement") or 0),
+                )
+                for m in metrics
+            ],
+            ensure_utc(product["published_at"]),
+            min_age_hours=settings.TREND_MIN_AGE_HOURS,
+        )
+        if is_too_old(sinais.age_hours, max_age_days=settings.TREND_MAX_AGE_DAYS):
+            return VELHO
+
     ti = TrendInput(
         product_id=product_id,
         title=product.get("title"),
@@ -125,11 +173,15 @@ def _build_input(db, product_id: str, since: dt.datetime) -> tuple[TrendInput, l
         mentions_24h=int(last.get("mentions", 0) or 0),
         rank_momentum=0.0,
         reviews_velocity=0.0,
-        social_velocity=_calc_social_velocity(metrics),
+        social_velocity=sinais.social_velocity if sinais else _calc_social_velocity(metrics),
         price_volatility=_calc_price_volatility(metrics),
         previous_final_score=None,
+        age_hours=sinais.age_hours if sinais else None,
+        views_per_hour=sinais.views_per_hour if sinais else None,
+        engagement_per_hour=sinais.engagement_per_hour if sinais else None,
+        has_shop_product=bool(product.get("has_shop_product")),
     )
-    return ti, sources
+    return ti, sources, sinais, marcador
 
 
 @shared_task(name="tasks.hybrid_trend_analyze")
@@ -172,16 +224,21 @@ def hybrid_trend_analyze(
 
     # Fase 1: monta as entradas de todos os produtos do ciclo — o percentil
     # (TIE-21) precisa da população inteira antes de pontuar qualquer um.
-    entradas = [e for row in active if (e := _build_input(db, row["_id"], since))]
+    brutas = [_build_input(db, row["_id"], since) for row in active]
+    velhos = sum(1 for e in brutas if e is VELHO)
+    sem_produto = sum(1 for e in brutas if e is SEM_PRODUTO)
+    entradas = [e for e in brutas if e not in (None, VELHO, SEM_PRODUTO)]
 
     contexto = (
-        PercentileContext([ti for ti, _ in entradas], min_group=settings.SCORE_PERCENTILE_MIN_GROUP)
+        PercentileContext(
+            [ti for ti, *_ in entradas], min_group=settings.SCORE_PERCENTILE_MIN_GROUP
+        )
         if settings.SCORE_NORMALIZATION == "percentile"
         else None
     )
 
     # Fase 2: pontua, grava e alerta
-    for ti, sources in entradas:
+    for ti, sources, sinais, marcador in entradas:
         product_id = ti.product_id
         result = engine.run(ti, contexto.normalize(ti) if contexto else None)
 
@@ -199,7 +256,21 @@ def hybrid_trend_analyze(
                 "analysis": result.analysis,
                 "recommendation": result.recommendation,
                 "sources": sources,
+                # O que fez o vídeo contar como produto (TIE-18); None fora do TikTok
+                "commercial_marker": marcador,
                 "debug": result.debug,
+                # Motor de tendência: ritmo e idade que entraram no score
+                "signals": (
+                    {
+                        "age_hours": round(sinais.age_hours, 2),
+                        "views_per_hour": round(sinais.views_per_hour, 2),
+                        "engagement_per_hour": round(sinais.engagement_per_hour, 2),
+                        "social_velocity": round(sinais.social_velocity, 4),
+                        "has_shop_product": ti.has_shop_product,
+                    }
+                    if sinais
+                    else None
+                ),
                 # Pesos usados neste insight, para comparar calibrações (TIE-22)
                 "score_weights": pesos,
             },
@@ -259,6 +330,8 @@ def hybrid_trend_analyze(
     return {
         "status": "ok",
         "processed": len(active),
+        "skipped_too_old": velhos,
+        "skipped_no_product": sem_produto,
         **alertas,
         "llm_cache_hits": engine.cache_hits,
         "llm_cache_misses": engine.cache_misses,

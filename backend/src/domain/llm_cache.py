@@ -17,7 +17,7 @@ import json
 from .trend_models import TrendInput
 
 # Suba quando o prompt ou o schema de resposta mudar: invalida o cache inteiro
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"  # v2: ritmo por idade (motor de tendência)
 
 # Casas decimais nos floats: ruído de ponto flutuante não pode virar miss
 _CASAS = 4
@@ -42,6 +42,10 @@ def llm_cache_key(ti: TrendInput) -> str:
         "social_velocity": _r(ti.social_velocity),
         "price_volatility": _r(ti.price_volatility),
         "previous_final_score": _r(ti.previous_final_score),
+        "age_hours": _r(ti.age_hours),
+        "views_per_hour": _r(ti.views_per_hour),
+        "engagement_per_hour": _r(ti.engagement_per_hour),
+        "has_shop_product": ti.has_shop_product,
     }
     bruto = json.dumps(entrada, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(bruto.encode()).hexdigest()

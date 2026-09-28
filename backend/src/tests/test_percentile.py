@@ -15,19 +15,25 @@ from src.domain.trend_models import TrendInput
 
 
 def _ti(pid, category, views, engagement=None, social=0.1, reviews=0.0):
+    # `views` aqui é o ritmo (views/h): é o que o percentil compara desde o
+    # motor de tendência; o total acumulado não entra mais
+    eng = engagement if engagement is not None else views // 20
     return TrendInput(
         product_id=pid,
         title=pid,
         category=category,
         price=10.0,
         sold_quantity=None,
-        views_24h=views,
-        engagement_24h=engagement if engagement is not None else views // 20,
+        views_24h=views * 10,
+        engagement_24h=eng * 10,
         mentions_24h=1,
         rank_momentum=0.0,
         reviews_velocity=reviews,
         social_velocity=social,
         price_volatility=0.0,
+        age_hours=10.0,
+        views_per_hour=float(views),
+        engagement_per_hour=float(eng),
     )
 
 
@@ -84,7 +90,7 @@ def test_normalize_devolve_percentis_e_a_base():
     norm = ctx.normalize(CAPINHAS[-1])
     assert norm.basis == "categoria"
     assert set(norm.values) == set(PERCENTILE_METRICS)
-    assert norm.values["views_24h"] == 0.9
+    assert norm.values["views_per_hour"] == 0.9
 
 
 def test_categoria_pequena_cai_no_pool_global():
@@ -93,7 +99,7 @@ def test_categoria_pequena_cai_no_pool_global():
     norm = ctx.normalize(raro)
     assert norm.basis == "global"
     # 30 mil está no meio do pool global de 11 produtos
-    assert 0.3 < norm.values["views_24h"] < 0.6
+    assert 0.3 < norm.values["views_per_hour"] < 0.6
 
 
 def test_pool_global_pequeno_volta_ao_absoluto():

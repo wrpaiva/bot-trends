@@ -28,6 +28,10 @@ def test_importa_entrypoint_das_migrations():
     importlib.import_module("apps.migrate.main")
 
 
+def test_importa_cli_de_autorizacao_do_ml():
+    importlib.import_module("apps.ml_auth.main")
+
+
 def test_pacote_db_nao_reexporta_migrations():
     """`db/__init__.py` deve ser inerte: importar `db` não pode puxar migrations."""
     db = importlib.import_module("src.infrastructure.db")
@@ -45,4 +49,5 @@ def test_get_migrations_devolve_as_versoes_em_ordem():
         "V004AddWindowFields",
         "V005AddProductsTextIndex",
         "V006AddInsightsWindowTsIndex",
+        "V007TextIndexLanguageOverride",
     ]
