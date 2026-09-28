@@ -71,3 +71,6 @@ redis_data/
 *~
 .DS_Store
 Thumbs.db
+
+# Backups do Mongo (TIE-35): dados de produção, nunca no git
+/backups/

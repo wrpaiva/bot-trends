@@ -1,9 +1,14 @@
 # src/infrastructure/db/migrations/versions/v003_add_product_uuid.py
 
-import datetime as dt
+
 import uuid
+
 from pymongo.database import Database
+
+from src.infrastructure.utils.datetime_utils import utcnow
+
 from ..migration_base import Migration, MigrationMeta
+
 
 class V003AddProductUUID(Migration):
     meta = MigrationMeta(
@@ -15,7 +20,7 @@ class V003AddProductUUID(Migration):
 
     def up(self, db: Database) -> None:
         products = db["products"]
-        now = dt.datetime.utcnow()
+        now = utcnow()
 
         cursor = products.find({"product_id": {"$exists": False}}, {"_id": 1}, batch_size=500)
 

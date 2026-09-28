@@ -135,6 +135,14 @@ services:
       MONGO_DB: ${MONGO_DB:-trends}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
     command: celery -A apps.worker.main.celery_app worker --loglevel=info --concurrency=2 -Q celery,ml,tiktok,trend
+    # Heartbeat real do Celery, no lugar do curl HTTP herdado da imagem (TIE-38).
+    # $$HOSTNAME: o nome do nó do worker é celery@<hostname do container>.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A apps.worker.main.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10"]
+      interval: 60s
+      timeout: 30s
+      start_period: 30s
+      retries: 3
     networks:
       - backend
     depends_on:
@@ -169,6 +177,10 @@ services:
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
     command: celery -A apps.worker.main.celery_app beat --loglevel=info
+    # O beat não serve HTTP nem responde a ping; o curl herdado da imagem o
+    # marcava unhealthy à toa. Vivo = processo rodando (restart: unless-stopped).
+    healthcheck:
+      disable: true
     networks:
       - backend
     depends_on:
@@ -242,6 +254,38 @@ services:
       - frontend
     depends_on:
       - api
+
+  # =========================================
+  # 💾 Backup do Mongo (TIE-35)
+  # =========================================
+  # mongodump diário para BACKUP_HOST_DIR, com retenção e registro em
+  # `backups` (o check de saúde alerta se falhar). Para tirar da máquina, aponte
+  # BACKUP_HOST_DIR para um disco/NAS montado ou use BACKUP_UPLOAD_CMD.
+  # Restauração testada: infra/backup/restore_test.sh (ver README).
+  backup:
+    image: mongo:7
+    container_name: trends_backup
+    restart: unless-stopped
+    entrypoint: ["bash", "/backup/backup-loop.sh"]
+    # Arquivos com o dono do host, não root (mesma armadilha do __pycache__)
+    user: "${BACKUP_UID:-1000}:${BACKUP_GID:-1000}"
+    environment:
+      HOME: /tmp
+      MONGO_URI: mongodb://${MONGO_USER:-trends}:${MONGO_PASSWORD:-trends_secret}@mongo:27017/?authSource=admin
+      MONGO_DB: ${MONGO_DB:-trends}
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_KEEP_MIN: ${BACKUP_KEEP_MIN:-3}
+      BACKUP_UPLOAD_CMD: ${BACKUP_UPLOAD_CMD:-}
+    volumes:
+      - ./infra/backup:/backup:ro
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - backend
 
 # =========================================
 # 🔗 Networks

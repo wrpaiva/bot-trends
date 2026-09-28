@@ -1,10 +1,11 @@
 # src/application/prompt_builder.py
 
 from __future__ import annotations
-import json
-from typing import Dict, Any
-from src.domain.trend_models import TrendInput, NumericScoreResult
 
+import json
+from typing import Any
+
+from src.domain.trend_models import NumericScoreResult, TrendInput
 
 SYSTEM = (
     "Você é um analista especialista em tendências de e-commerce e viralização social. "
@@ -13,7 +14,7 @@ SYSTEM = (
 )
 
 
-def build_trend_prompt(ti: TrendInput, numeric: NumericScoreResult) -> Dict[str, Any]:
+def build_trend_prompt(ti: TrendInput, numeric: NumericScoreResult) -> dict[str, Any]:
     data = {
         "product": {
             "product_id": ti.product_id,

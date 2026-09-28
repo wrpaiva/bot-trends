@@ -1,107 +1,117 @@
 # src/infrastructure/collectors/tiktok.py
 
 from __future__ import annotations
+
 import logging
-import os
+import re
 import time
-from typing import Dict, Any, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 import httpx
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
-)
+
+from src.infrastructure.collectors.http_policy import RateLimiter, is_transient, retry_transient
+from src.infrastructure.config import settings
+from src.infrastructure.logging_setup import http_log_hooks
 
 logger = logging.getLogger(__name__)
+
+# Id numérico do vídeo dentro da URL: .../@autor/video/7075778590062988546
+_VIDEO_ID_NA_URL = re.compile(r"/video/(\d+)")
 
 
 class TikTokApifyCollector:
     """
     Coletor TikTok via Apify Actor.
 
-    Env:
+    Config (via `settings`):
       APIFY_TOKEN (obrigatório)
       APIFY_ACTOR_ID (default: clockworks~tiktok-scraper)
 
+    O token vai no header `Authorization`, nunca na query string: a URL aparece
+    nas mensagens de `httpx.HTTPStatusError`, que são logadas (TIE-3).
+
     Features:
-      - Retry automático com backoff exponencial
+      - Retry só em erro transitório (429/5xx/timeout), respeitando Retry-After
+      - Teto de requisições por minuto (APIFY_MAX_REQUESTS_PER_MINUTE)
+      - `errors` conta as etapas que falharam de vez (TIE-17)
       - Context manager para gerenciamento de recursos
       - Logging estruturado de erros
       - Polling com timeout para aguardar execução do actor
     """
 
+    BASE_URL = "https://api.apify.com/v2"
     POLL_INTERVAL_S = 5
     MAX_WAIT_S = 300  # 5 minutos máximo de espera
 
     def __init__(
         self,
-        hashtags: List[str],
+        hashtags: list[str],
         *,
         results_per_page: int = 50,
         timeout_s: int = 60,
         dataset_limit: int = 200,
+        max_requests_per_minute: int | None = None,
+        transport: httpx.BaseTransport | None = None,
     ):
-        self.apify_token = os.environ.get("APIFY_TOKEN")
+        self.apify_token = settings.APIFY_TOKEN
         if not self.apify_token:
             raise RuntimeError("APIFY_TOKEN não definido no ambiente.")
 
-        self.actor_id = os.getenv("APIFY_ACTOR_ID", "clockworks~tiktok-scraper")
+        self.actor_id = settings.APIFY_ACTOR_ID
         self.hashtags = [h.strip().lstrip("#") for h in hashtags if h.strip()]
         self.results_per_page = int(results_per_page)
         self.dataset_limit = int(dataset_limit)
+        if max_requests_per_minute is None:
+            max_requests_per_minute = settings.APIFY_MAX_REQUESTS_PER_MINUTE
+        self._limiter = RateLimiter(max_requests_per_minute)
+        self.errors = 0
         self._timeout_s = timeout_s
-        self._client: Optional[httpx.Client] = None
+        self._transport = transport  # injetável nos testes
+        self._client: httpx.Client | None = None
 
     @property
     def client(self) -> httpx.Client:
         """Lazy initialization do client HTTP."""
         if self._client is None:
-            self._client = httpx.Client(timeout=self._timeout_s)
+            self._client = httpx.Client(
+                base_url=self.BASE_URL,
+                headers={"Authorization": f"Bearer {self.apify_token}"},
+                timeout=self._timeout_s,
+                transport=self._transport,
+                event_hooks=http_log_hooks("apify"),
+            )
         return self._client
 
-    def __enter__(self) -> "TikTokApifyCollector":
+    def __enter__(self) -> TikTokApifyCollector:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         self.close()
         return False
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=15),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True,
-    )
-    def _run_actor(self) -> Dict[str, Any]:
+    def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Requisição com teto de taxa; levanta HTTPStatusError em resposta de erro."""
+        self._limiter.wait()
+        r = self.client.request(method, url, **kwargs)
+        r.raise_for_status()
+        return r
+
+    @retry_transient(attempts=3, min_s=2, max_s=15)
+    def _run_actor(self) -> dict[str, Any]:
         """Inicia execução do actor no Apify."""
-        url = f"https://api.apify.com/v2/acts/{self.actor_id}/runs?token={self.apify_token}"
         payload = {
             "hashtags": self.hashtags,
             "resultsPerPage": self.results_per_page,
             "commentsPerPost": 0,
             "maxRepliesPerComment": 0,
         }
-        r = self.client.post(url, json=payload)
-        r.raise_for_status()
-        return r.json()
+        return self._request("POST", f"/acts/{self.actor_id}/runs", json=payload).json()
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, min=1, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True,
-    )
-    def _get_run_status(self, run_id: str) -> Dict[str, Any]:
+    @retry_transient(attempts=3, min_s=1, max_s=10, multiplier=0.5)
+    def _get_run_status(self, run_id: str) -> dict[str, Any]:
         """Verifica status de uma execução do actor."""
-        url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={self.apify_token}"
-        r = self.client.get(url)
-        r.raise_for_status()
-        return r.json()
+        return self._request("GET", f"/actor-runs/{run_id}").json()
 
     def _wait_for_run(self, run_id: str) -> bool:
         """Aguarda execução do actor finalizar (polling)."""
@@ -119,8 +129,11 @@ class TikTokApifyCollector:
                     return False
 
                 logger.debug(f"Actor run {run_id} status: {status}, aguardando...")
-            except (httpx.HTTPError, httpx.TimeoutException) as e:
+            except httpx.HTTPError as e:
                 logger.warning(f"Erro ao verificar status do run {run_id}: {e}")
+                if not is_transient(e):
+                    # 4xx permanente não melhora esperando; aborta em vez de gastar 5 min
+                    return False
 
             time.sleep(self.POLL_INTERVAL_S)
             elapsed += self.POLL_INTERVAL_S
@@ -128,35 +141,43 @@ class TikTokApifyCollector:
         logger.warning(f"Timeout aguardando actor run {run_id}")
         return False
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, min=1, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True,
-    )
-    def _get_dataset_items(self, dataset_id: str) -> List[Dict[str, Any]]:
+    @retry_transient(attempts=3, min_s=1, max_s=10, multiplier=0.5)
+    def _get_dataset_items(self, dataset_id: str) -> list[dict[str, Any]]:
         """Busca items do dataset gerado pelo actor."""
-        url = (
-            f"https://api.apify.com/v2/datasets/{dataset_id}/items"
-            f"?token={self.apify_token}&clean=true&limit={self.dataset_limit}"
-        )
-        r = self.client.get(url)
-        r.raise_for_status()
-        return r.json()
+        return self._request(
+            "GET",
+            f"/datasets/{dataset_id}/items",
+            params={"clean": "true", "limit": self.dataset_limit},
+        ).json()
 
-    def _normalize_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_item(self, item: dict[str, Any]) -> dict[str, Any] | None:
         """Normaliza um item do TikTok para o formato interno."""
+        # O actor atual devolve os contadores no primeiro nível do item; versões
+        # antigas os aninhavam em `stats`. Aceita os dois formatos.
         stats = item.get("stats") or {}
         author = item.get("authorMeta") or {}
 
-        views = stats.get("playCount") or stats.get("plays") or 0
-        likes = stats.get("diggCount") or stats.get("likes") or 0
-        comments = stats.get("commentCount") or stats.get("comments") or 0
-        shares = stats.get("shareCount") or stats.get("shares") or 0
+        def _count(*keys: str) -> Any:
+            for src in (item, stats):
+                for key in keys:
+                    if src.get(key):
+                        return src[key]
+            return 0
+
+        views = _count("playCount", "plays")
+        likes = _count("diggCount", "likes")
+        comments = _count("commentCount", "comments")
+        shares = _count("shareCount", "shares")
 
         permalink = item.get("webVideoUrl") or item.get("url")
-        vid = item.get("id") or item.get("videoId") or permalink
+        # Sempre o id numérico: usar a URL como id fazia o mesmo vídeo entrar
+        # duas vezes (TIE-19), uma com id e outra com URL.
+        vid = item.get("id") or item.get("videoId")
+        if not vid:
+            m = _VIDEO_ID_NA_URL.search(permalink or "")
+            if not m:
+                return None
+            vid = m.group(1)
 
         return {
             "source": "tiktok",
@@ -175,7 +196,7 @@ class TikTokApifyCollector:
             },
         }
 
-    def collect(self) -> Iterable[Dict[str, Any]]:
+    def collect(self) -> Iterable[dict[str, Any]]:
         """
         Yield normalizado de vídeos do TikTok.
 
@@ -193,8 +214,9 @@ class TikTokApifyCollector:
         try:
             logger.info(f"Iniciando coleta TikTok para hashtags: {self.hashtags}")
             run = self._run_actor()
-        except (httpx.HTTPError, httpx.TimeoutException) as e:
+        except httpx.HTTPError as e:
             logger.error(f"Falha ao iniciar actor TikTok: {e}")
+            self.errors += 1
             return
 
         run_data = run.get("data") or {}
@@ -203,23 +225,33 @@ class TikTokApifyCollector:
 
         if not dataset_id:
             logger.warning("Actor não retornou dataset_id")
+            self.errors += 1
             return
 
         # Aguarda execução finalizar (se necessário)
-        if run_id and run_data.get("status") not in ("SUCCEEDED",):
-            if not self._wait_for_run(run_id):
-                logger.warning("Execução do actor não finalizou com sucesso")
-                return
+        if (
+            run_id
+            and run_data.get("status") not in ("SUCCEEDED",)
+            and not self._wait_for_run(run_id)
+        ):
+            logger.warning("Execução do actor não finalizou com sucesso")
+            self.errors += 1
+            return
 
         try:
             items = self._get_dataset_items(dataset_id)
             logger.info(f"Dataset {dataset_id}: {len(items)} items encontrados")
-        except (httpx.HTTPError, httpx.TimeoutException) as e:
+        except httpx.HTTPError as e:
             logger.error(f"Falha ao buscar dataset {dataset_id}: {e}")
+            self.errors += 1
             return
 
         for item in items:
-            yield self._normalize_item(item)
+            normalizado = self._normalize_item(item)
+            if normalizado is None:
+                logger.warning("Item do TikTok sem id de vídeo, ignorado")
+                continue
+            yield normalizado
             total_collected += 1
 
         logger.info(f"Coleta TikTok finalizada: {total_collected} items")

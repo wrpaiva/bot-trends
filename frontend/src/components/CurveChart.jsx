@@ -5,70 +5,68 @@ import {
   LinearScale,
   PointElement,
   LineElement,
-  TimeScale,
   Tooltip,
-  Legend
+  Legend,
 } from "chart.js";
 import { Line } from "react-chartjs-2";
+import { buildSeries, historyState } from "../drawer.js";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
 
-function toLabel(ts) {
-  try {
-    const d = new Date(ts);
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  } catch {
-    return String(ts);
-  }
-}
+const METRICAS = {
+  views: "Views",
+  engagement: "Engajamento",
+  mentions: "Menções",
+  price: "Preço",
+};
 
-export default function CurveChart({ points }) {
-  const [metric, setMetric] = useState("views"); // views|engagement|mentions|price
+export default function CurveChart({ points, hours }) {
+  const [metric, setMetric] = useState("views");
 
-  const { labels, values } = useMemo(() => {
-    const lbls = [];
-    const vals = [];
-    (points || []).forEach((p) => {
-      lbls.push(toLabel(p.ts));
-      vals.push(Number(p[metric] ?? 0));
-    });
-    return { labels: lbls, values: vals };
-  }, [points, metric]);
+  const { labels, values } = useMemo(() => buildSeries(points, metric), [points, metric]);
+  const estado = historyState(points, metric);
 
-  const data = useMemo(() => ({
-    labels,
-    datasets: [
-      {
-        label: metric,
-        data: values,
-        tension: 0.25
-      }
-    ]
-  }), [labels, values, metric]);
+  const data = useMemo(
+    () => ({
+      labels,
+      datasets: [{ label: METRICAS[metric], data: values, tension: 0.25, spanGaps: false }],
+    }),
+    [labels, values, metric]
+  );
 
-  const options = useMemo(() => ({
-    responsive: true,
-    plugins: {
-      legend: { display: true },
-      tooltip: { enabled: true }
-    },
-    scales: {
-      y: { beginAtZero: true }
-    }
-  }), []);
+  const options = useMemo(
+    () => ({
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: { enabled: true } },
+      scales: { y: { beginAtZero: metric !== "price" } },
+    }),
+    [metric]
+  );
 
   return (
     <div style={{ border: "1px solid #eee", borderRadius: 8, padding: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
         <b>Curva</b>
-        <select value={metric} onChange={(e) => setMetric(e.target.value)}>
-          <option value="views">views</option>
-          <option value="engagement">engagement</option>
-          <option value="mentions">mentions</option>
-          <option value="price">price</option>
+        <span style={{ opacity: 0.6, fontSize: 13 }}>
+          últimas {hours}h · {(points || []).length} leituras
+        </span>
+        <select value={metric} onChange={(e) => setMetric(e.target.value)} style={{ marginLeft: "auto" }}>
+          {Object.entries(METRICAS).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
         </select>
       </div>
-      <Line data={data} options={options} />
+      {estado === "vazio" ? (
+        <div style={{ padding: 24, textAlign: "center", opacity: 0.7 }}>
+          Histórico insuficiente para desenhar a curva de {METRICAS[metric].toLowerCase()} — são
+          necessárias ao menos 2 leituras com esse dado no período. Aumente o período ou espere as
+          próximas coletas.
+        </div>
+      ) : (
+        <Line data={data} options={options} />
+      )}
     </div>
   );
 }

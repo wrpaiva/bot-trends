@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 import httpx
@@ -10,6 +9,8 @@ import httpx
 from src.domain.interfaces import LLMClient
 from src.domain.trend_models import LLMResult
 from src.infrastructure.config import settings
+from src.infrastructure.llm.schema import LLMResponseError, parse_llm_content
+from src.infrastructure.logging_setup import http_log_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class OpenAICompatibleLLMClient(LLMClient):
       LLM_MODEL (default definido em config.py)
     """
 
-    def __init__(self, timeout_s: int = 25):
+    def __init__(self, timeout_s: int = 25, transport: httpx.BaseTransport | None = None):
         base = settings.LLM_BASE_URL
         key = settings.LLM_API_KEY
         if not base or not key:
@@ -33,7 +34,11 @@ class OpenAICompatibleLLMClient(LLMClient):
         self.base_url = base.rstrip("/")
         self.api_key = key
         self.model = settings.LLM_MODEL
-        self.client = httpx.Client(timeout=timeout_s)
+        self.client = httpx.Client(
+            timeout=timeout_s,
+            transport=transport,  # injetável nos testes
+            event_hooks=http_log_hooks("llm"),
+        )
 
         # O modelo efetivo tem que aparecer no log: a falha que esta classe já
         # teve foi silenciosa — o .env dizia LLM_MODEL_NAME, o código lia
@@ -59,16 +64,13 @@ class OpenAICompatibleLLMClient(LLMClient):
 
         r = self.client.post(url, headers=headers, json=payload)
         r.raise_for_status()
-        data = r.json()
 
-        content = data["choices"][0]["message"]["content"]
-        obj = json.loads(content)
+        try:
+            content = r.json()["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise LLMResponseError(
+                "envelope da resposta fora do formato chat/completions"
+            ) from None
 
-        return LLMResult(
-            trend_classification=obj["trend_classification"],
-            potential_score_0_100=float(obj["potential_score_0_100"]),
-            risk_level=obj["risk_level"],
-            analysis=str(obj["analysis"]),
-            recommendation=str(obj["recommendation"]),
-            confidence_0_1=float(obj.get("confidence_0_1", 0.6)),
-        )
+        # Validação e clamp dos campos (TIE-24)
+        return parse_llm_content(content)

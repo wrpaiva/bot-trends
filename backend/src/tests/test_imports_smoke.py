@@ -34,7 +34,7 @@ def test_pacote_db_nao_reexporta_migrations():
     assert not hasattr(db, "get_migrations")
 
 
-def test_get_migrations_devolve_as_quatro_versoes():
+def test_get_migrations_devolve_as_versoes_em_ordem():
     from src.infrastructure.db.migrations import get_migrations
 
     migrations = get_migrations()
@@ -43,4 +43,6 @@ def test_get_migrations_devolve_as_quatro_versoes():
         "V002AddCanonicalAndSchemaVersion",
         "V003AddProductUUID",
         "V004AddWindowFields",
+        "V005AddProductsTextIndex",
+        "V006AddInsightsWindowTsIndex",
     ]

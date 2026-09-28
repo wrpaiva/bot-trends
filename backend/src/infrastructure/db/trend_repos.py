@@ -1,8 +1,12 @@
 # src/infrastructure/db/trend_repos.py
 
 import datetime as dt
-from typing import Dict, Any, Optional
+from typing import Any
+
 from pymongo.database import Database
+
+from src.infrastructure.utils.datetime_utils import utcnow
+
 
 class TrendInsightRepo:
     def __init__(self, db: Database):
@@ -14,7 +18,7 @@ class TrendInsightRepo:
     def insert(
         self,
         product_id: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         *,
         window_from: dt.datetime,
         window_to: dt.datetime,
@@ -22,7 +26,7 @@ class TrendInsightRepo:
     ) -> None:
         doc = {
             "product_id": product_id,
-            "ts": dt.datetime.utcnow(),
+            "ts": utcnow(),
             "window_from": window_from,
             "window_to": window_to,
             "window_hours": window_hours,
@@ -30,5 +34,7 @@ class TrendInsightRepo:
         }
         self.col.insert_one(doc)
 
-    def latest(self, product_id: str) -> Optional[Dict[str, Any]]:
-        return self.col.find_one({"product_id": product_id}, sort=[("ts", -1)], projection={"_id": 0})
+    def latest(self, product_id: str) -> dict[str, Any] | None:
+        return self.col.find_one(
+            {"product_id": product_id}, sort=[("ts", -1)], projection={"_id": 0}
+        )

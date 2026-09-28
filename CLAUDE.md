@@ -16,8 +16,7 @@ bot-trends/
 │   │   ├── api/          # FastAPI: main.py (app+middlewares) · routes.py (endpoints)
 │   │   ├── worker/       # Celery: main.py (app+beat) · tasks.py (coleta) · tasks_trend.py (análise)
 │   │   ├── migrate/      # Runner de migrações Mongo
-│   │   ├── bootstrap/    # Seed de categorias
-│   │   └── tools/        # Scripts utilitários avulsos
+│   │   └── bootstrap/    # Seed de categorias
 │   └── src/              # Core (Clean Architecture)
 │       ├── domain/       # Entidades + regras puras. SEM I/O, SEM libs externas.
 │       ├── application/  # Casos de uso (HybridTrendEngine, prompt_builder)
@@ -57,6 +56,26 @@ pytest src/tests -q          # NOTA: use o caminho explícito, ver "Armadilhas"
 ruff check . && black .
 ```
 
+Sem Python 3.11/Poetry na máquina, use a imagem de dev (tem pytest, ruff e black):
+```bash
+docker build --target development -t trends-dev backend
+docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
+  -v $PWD/backend:/app -w /app trends-dev sh -c \
+  "pytest -p no:cacheprovider src/tests -q && ruff check --no-cache . && black --check ."
+```
+Sem o `--user`, o container grava `__pycache__` e `.ruff_cache` como root dentro de `backend/`.
+
+Testes que precisam de Mongo real (hoje só `test_search.py`: o mongomock não implementa `$text`)
+leem `MONGO_TEST_URI` e são **pulados** sem ela. O CI sobe um `mongo:7` e roda sempre. Local,
+contra o `trends_mongo` do compose (cada execução cria e apaga um banco `trends_test_*`):
+```bash
+set -a; . ./.env; set +a
+docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
+  --network trends_backend \
+  -e MONGO_TEST_URI="mongodb://${MONGO_USER}:${MONGO_PASSWORD}@trends_mongo:27017/?authSource=admin" \
+  -v $PWD/backend:/app -w /app trends-dev pytest -p no:cacheprovider src/tests -q
+```
+
 Rodar uma análise manual:
 ```bash
 docker compose run --rm api python -c \
@@ -77,9 +96,13 @@ via bloco `environment:` do serviço `api`. Não confie no valor que está no ar
 vem do compose. `API_KEY` usa `${API_KEY:?}`: sem ela no `.env` da raiz, o compose se recusa a
 subir (falha rápido em vez de devolver 500 em runtime).
 
-**Leitura de config no código é inconsistente hoje:** existe `src/infrastructure/config.py`
-(pydantic `Settings`), mas quase todo o código lê `os.environ` direto. Ao mexer em config,
-prefira migrar para `settings`, e mantenha o nome da variável idêntico nos dois lugares.
+**Toda config passa por `src/infrastructure/config.py` (`settings`).** Nenhum outro módulo lê
+`os.environ` — `src/tests/test_config.py` falha se isso voltar. Variável nova entra no `Settings`
+com o mesmo nome do `.env`. A API **não sobe** sem `API_KEY` (validado no `lifespan`); o worker
+só avisa no log quando falta credencial opcional (`APIFY_TOKEN`, `TELEGRAM_*`, `LLM_API_KEY`).
+Atenção: o pydantic lê o `backend/.env` quando você roda fora do Docker, coisa que o
+`os.getenv` antigo não fazia — os valores de lá (ex.: `REDIS_URL=redis://redis:...`) passam a
+valer também no seu terminal.
 
 **Nunca** commitar segredos. Ambos os `.env` estão no `.gitignore`; os `.env.example` só recebem
 placeholders.
@@ -89,8 +112,9 @@ placeholders.
 ## Convenções ao adicionar código
 
 **Nova task Celery:** decore com `@shared_task(name="tasks.<nome>")`, registre a rota de fila
-em `apps/worker/main.py` (`task_routes`) **e** garanta que o worker consome essa fila
-(`-Q` no comando do compose). Sem isso a task é publicada e nunca executa.
+em `apps/worker/main.py` (`task_routes`), garanta que o worker consome essa fila
+(`-Q` no comando do compose) **e**, se a task estiver num módulo novo, acrescente o módulo ao
+`include=` do `Celery(...)`. Sem isso a task é publicada e nunca executa.
 
 **Nova migração:** crie `src/infrastructure/db/migrations/versions/vNNN_<descricao>.py` seguindo
 `migration_base.Migration`, registre em `versions/__init__.py`. Migrações são idempotentes e
@@ -102,10 +126,15 @@ protegidas por lock distribuído — nunca edite uma migração já aplicada, cr
 **Novo endpoint:** vá em `apps/api/routes.py`. Tudo que está nesse router já exige `X-API-Key`
 (injetado no `include_router`). Rotas públicas ficam em `apps/api/main.py`. Para rate limit
 específico use `@limiter.limit(...)` — e nesse caso o handler **precisa** receber `request: Request`.
+Toda rota entra também na **tabela de endpoints do `README.md` da raiz**: `test_docs.py` falha
+se as duas divergirem (no CI; o container de dev só monta `backend/` e pula esse teste).
 
-**Scoring:** os pesos vivem em `src/domain/scoring.py`. A fórmula final é
-`0.6 * numeric + 0.4 * llm`, com fallback automático se o LLM falhar. Alterou peso? Atualize
-`src/tests/test_scoring.py` no mesmo commit.
+**Scoring:** os defaults dos pesos vivem em `ScoreWeights`/`HybridWeights` (`src/domain/scoring.py`)
+e são sobrescritos por `SCORE_W_*` no `backend/.env` — calibrar não exige deploy de código.
+A fórmula final é `numeric × SCORE_W_NUMERIC + llm × SCORE_W_LLM` (default 0.6/0.4), com
+fallback automático se o LLM falhar. Pesos que não somam 1.0 derrubam o processo na subida.
+Cada insight grava os pesos usados em `score_weights`. Mudou um **default**? Atualize os
+valores dourados de `src/tests/test_scoring.py` no mesmo commit, conscientemente (TIE-22).
 
 ---
 
@@ -117,36 +146,32 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    `unspecified_token`, `/sites/MLB/search` devolve 403 e `/items` devolve 401. O
    `MercadoLivreCollector` não tem nenhum suporte a OAuth — só lê `ML_BASE_URL` e `ML_SITE_ID`.
    **Nenhuma coleta do ML funciona hoje**, e a Fase 2 inteira depende disso (TIE-41).
-2. **O seed de categorias e o `collect_ml` discordam do schema.** `apps/bootstrap/main.py`
-   grava categorias com `enabled: False` e sem `ml_category_id`; `collect_ml` filtra por
-   `{"enabled": True, "ml_category_id": {"$exists": True}}`. Recém-instalado, o sistema
-   devolve `{"status": "no enabled categories"}` para sempre (TIE-20).
-3. **`collect_ml` devolve `status: ok` mesmo quando toda requisição falhou.** O erro é logado
-   e engolido; o retorno é `{"status": "ok", "inserted": 0}`. Falha silenciosa (TIE-17).
-4. **`get_db()` abre um `MongoClient` novo a cada chamada** (`infrastructure/db/mongo.py`) —
-   por request e por task. Não é pool reaproveitado (TIE-7).
-5. **`rank_momentum` e `reviews_velocity` estão hardcoded em `0.0`** em `tasks_trend.py`,
+2. **`rank_momentum` e `reviews_velocity` estão hardcoded em `0.0`** em `tasks_trend.py`,
    ou seja 35% do score numérico é sempre zero (TIE-16).
-6. **README documenta `GET /search`, que não existe** em `routes.py` (TIE-30/TIE-33).
-7. `datetime.utcnow()` é usado em todo lugar (deprecado no 3.12; o projeto fixa 3.11).
-   Existe `src/infrastructure/utils/datetime_utils.py` subutilizado (TIE-10).
-8. **`MONGO_PASSWORD` só vale na primeira subida do volume.** `MONGO_INITDB_ROOT_PASSWORD` é
+3. **`MONGO_PASSWORD` só vale na primeira subida do volume.** `MONGO_INITDB_ROOT_PASSWORD` é
    lido apenas quando `/data/db` está vazio. Trocar a senha no `.env` com o volume
    `trends_mongo_data` já existente dá `storedKey mismatch` e o healthcheck nunca fica verde.
    Para valer: `docker compose down && docker volume rm trends_mongo_data`.
-9. **`http://localhost:80` não é uma origem válida.** Na porta 80 o browser envia
+4. **`http://localhost:80` não é uma origem válida.** Na porta 80 o browser envia
    `http://localhost`, sem a porta. Com `:80` explícito em `CORS_ORIGINS` o preflight falha.
-10. **Os containers `beat` e `worker` aparecem como `unhealthy` e isso é falso.** Ambos herdam
-    o `HEALTHCHECK` do Dockerfile (`curl localhost:8000/health`), mas nenhum dos dois serve
-    HTTP — só a API serve. Cosmético, mas polui o `docker compose ps` (TIE-38).
-
-## Pendências de higiene do repositório
-
-- Arquivos mortos: `src/infrastructure/db/migrations/versions/runner.py` (vazio, duplica o runner
-  real em `migrations/runner.py`), `backend/docker-compose.yml` e `frontend/docker-compose.yml`
-  (o compose da raiz é o oficial).
-- `ruff check .` acusa ~138 erros pré-existentes no backend (a maioria `I001` e `W292`).
-  Não é regressão; só nunca foi rodado. Ao mexer num arquivo, deixe-o limpo.
+5. **O LLM nunca funcionou nesta instalação.** Em 2026-09-27, os 9.050 insights gravados caíram
+   no fallback numérico: 9.045 com `429 Too Many Requests` da OpenAI e 5 com timeout — nenhum
+   tem `llm_score > 0`. 429 constante costuma ser **cota/crédito esgotado** na conta, não rate
+   limit. Até resolver, `final_score` = score numérico e a análise/recomendação no dashboard é
+   o texto do fallback. Confira com: `db.trend_insights.countDocuments({"llm_score": {$gt: 0}})`.
+6. **A coleta do TikTok está parada desde ~2026-09-25: crédito da Apify esgotado.** O actor
+   devolve `402 Payment Required` a cada ciclo. O worker com o código antigo retentava e
+   devolvia `status: ok, inserted: 0` — ninguém viu por 2,7 dias (achado pelo check de saúde da
+   TIE-39). Com a análise rodando sobre métricas cada vez mais velhas, o ranking congela e, em
+   72 h, esvazia. Recarregar créditos ou trocar de plano na Apify destrava.
+7. **As hashtags do TikTok definem o que o motor monitora.** `fyp` trazia conteúdo global e
+   antigo (vídeos em árabe, de 2022); desde 2026-09-24 o `backend/.env` usa
+   `tiktokmademebuyit,achadinhos,achadosdashopee`. **Custo:** ~US$ 0,0037 por vídeo
+   (medido em 2026-09-24: US$ 0,186 por execução de 50 vídeos). Volume controlado por
+   `TIKTOK_RESULTS_PER_HASHTAG` (default 10) e `TIKTOK_INTERVAL_MIN` (default 120). Antes
+   disso eram 50 vídeos a cada 30 min, e uma noite consumiu US$ 3,55 dos US$ 5 do plano
+   gratuito. Ao mexer em `main.py`, confira o agendamento **dentro** do container do beat —
+   já aconteceu de ele continuar com a imagem antiga depois de um `up -d --build`.
 
 ## Já corrigido (não reintroduzir)
 
@@ -175,6 +200,160 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
 - **Mongo e Redis não são mais publicados em `0.0.0.0`** — só em `127.0.0.1`, e as portas do
   host viraram configuráveis (`MONGO_HOST_PORT`, `REDIS_HOST_PORT`, `API_HOST_PORT`,
   `WEB_HOST_PORT`, `WEB_DEV_HOST_PORT`) para conviver com outros projetos na mesma máquina.
+- **`get_db()` abria um `MongoClient` novo a cada chamada.** Agora é um cliente por processo
+  (`mongo.get_client()`), fechado no `lifespan` da API; no worker, `worker_process_init` descarta
+  o cliente herdado do fork, porque `MongoClient` não é fork-safe. Não volte a instanciar
+  `MongoClient` fora de `mongo.py` (TIE-7).
+- **Arquivos mortos removidos** (`migrations/versions/runner.py`, `backend/docker-compose.yml`,
+  `frontend/docker-compose.yml`) e **lint zerado**: `ruff check .` e `black --check .` passam
+  no backend inteiro. O CI (`.github/workflows/ci.yml`) bloqueia qualquer regressão (TIE-9,
+  TIE-11).
+- **`tasks.hybrid_trend_analyze` nunca era registrada no worker.** `autodiscover_tasks` só
+  importava `apps/worker/tasks.py`; o beat publicava a análise a cada 30 min e o worker
+  descartava como `unregistered task` — a análise agendada nunca tinha rodado. Agora os módulos
+  vão explícitos no `include=` do `Celery(...)` em `apps/worker/main.py`. **Módulo de task novo
+  entra nessa lista**; `src/tests/test_worker_registro.py` falha se uma task roteada ou agendada
+  não estiver registrada (roda em subprocesso de propósito — ver docstring).
+- **`APIFY_TOKEN` vazava nos logs do worker.** Ia na query string (`?token=...`) e o
+  `HTTPStatusError` loga a URL inteira. Agora vai no header `Authorization: Bearer` do
+  `httpx.Client` e o collector lê de `settings`. `src/tests/test_tiktok_collector.py` falha se o
+  token voltar para a URL ou para o log. Nunca coloque credencial em URL (TIE-3).
+- **Collectors sem política de retry e `status: ok` falso.** Retentavam qualquer `HTTPError`
+  (inclusive 401/404) e as tasks devolviam `{"status": "ok", "inserted": 0}` com toda requisição
+  falhando. Agora `collectors/http_policy.py` centraliza: retry só em 429/5xx/timeout/rede,
+  `Retry-After` respeitado (teto de 60 s), `RateLimiter` por collector
+  (`ML_MAX_REQUESTS_PER_MINUTE`, `APIFY_MAX_REQUESTS_PER_MINUTE`; `0` desliga). Cada collector
+  expõe `errors`, e as tasks devolvem `status` `ok`/`partial`/`error` + `errors`. **Collector
+  novo usa `retry_transient` e `RateLimiter` e conta `errors`**, senão a task volta a mentir
+  (TIE-17).
+- **Seed de categorias sem saída.** O seed default gravava categorias sem `ml_category_id`, então
+  elas não apareciam em `GET /categories`, `POST /categories/enable` não as achava e `collect_ml`
+  devolvia `no enabled categories` para sempre. Agora o seed traz os IDs de primeiro nível do
+  MLB (ainda não conferidos na API — ver TIE-41), casa por `ml_category_id` (a árvore do ML não
+  duplica o default) e grava `enabled`/`keywords`/`key` só no insert: **rodar o bootstrap de novo
+  não desabilita o que o usuário habilitou**. `apps/tools/find_categories.py` foi removido —
+  era o mesmo que `GET /categories?query=` (TIE-20).
+- **Datas naive (`datetime.utcnow()`).** Todas as datas agora são aware em UTC:
+  `src/infrastructure/utils/datetime_utils.utcnow()` é o único jeito de pegar "agora", o
+  `MongoClient` é criado com `tz_aware=True, tzinfo=UTC` (o que vem do banco também é aware) e
+  `ensure_utc()` normaliza valor naive legado. O ruff barra `datetime.utcnow()` (`DTZ003`).
+  **Em teste com mongomock, use `mongomock.MongoClient(tz_aware=True)`** — sem isso as datas
+  voltam naive e a comparação com `utcnow()` quebra. Efeito colateral bom: a API passou a
+  mandar `+00:00`, e o `CurveChart` deixou de exibir o horário deslocado em 3 h (TIE-10).
+- **Config lida de `os.environ` em 7 módulos**, cada um com o próprio default (TIE-8). Agora é
+  tudo `settings`, com `API_KEY`, `CORS_ORIGINS` e as flags `BOOTSTRAP_*` na classe; a chave
+  da API é comparada com `secrets.compare_digest` e lida a cada requisição.
+- **`/rankings/latest` e `/insights/latest` sempre vazios.** Filtravam
+  `window_from >= agora - hours`, mas a task grava `window_from = t_análise - hours`, sempre
+  anterior — nenhum insight passava e o dashboard nunca mostrou ranking. Agora filtram por `ts`
+  (momento da análise). Coberto em `test_routes.py`, cujo helper grava insight do jeito que a
+  task grava (TIE-12).
+- **Lock de migração estourava `DuplicateKeyError`** quando outra instância o segurava (o upsert
+  tentava inserir um segundo `global`). Agora devolve `False` e o runner dá a mensagem clara
+  (TIE-12).
+- **Token do Telegram vazava no traceback.** A API do Telegram exige o token na URL e o
+  `HTTPStatusError` do httpx carrega a URL. `TelegramNotifier.send` agora levanta
+  `TelegramError` sem URL e sem encadear a exceção original (`from None`) (TIE-12).
+- **Resposta do LLM sem validação.** Classificação alucinada ou score 150 iam direto para o banco.
+  Agora `src/infrastructure/llm/schema.py` (pydantic, fora do `domain/` de propósito) restringe
+  classificação/risco aos `Literal` do domínio, clampa score em 0–100 e confidence em 0–1, e
+  transforma qualquer outra falha em `LLMResponseError`. O engine loga WARNING e cai no fallback
+  numérico. **Campo novo na resposta do LLM entra no `LLMResponse`, não em `obj[...]` no
+  cliente** (TIE-24).
+- **Alerta repetido a cada 30 min, e uma falha derrubava a análise.** Agora a regra mora em
+  `src/domain/alerting.py` (um alerta por produto por `ALERT_COOLDOWN_HOURS`, realerta antes só
+  se a classificação subir de faixa; limiar em `ALERT_THRESHOLD`), com estado na collection
+  `alert_state` (sobrevive a restart; só é gravado se o envio deu certo). `TelegramError` num
+  produto não para os outros, e **Telegram ou LLM sem config não derrubam mais a task**: sem
+  Telegram a análise roda sem alertas, sem LLM cai no score numérico. A task devolve
+  `alerts_sent`/`alerts_suppressed`/`alerts_failed` (TIE-31).
+- **`GET /search` documentado e inexistente.** Agora existe: índice de texto em `products.title`
+  com stemming em português (migração `v005` — **rode `apps.migrate.main` em quem já está no ar**,
+  sem o índice a rota devolve 503), ordenado por relevância, paginado (`page`, `limit` ≤ 50) e
+  com o último score de cada produto (TIE-30).
+- **READMEs desatualizados e duplicados.** O `backend/README.md` era cópia do da raiz e os dois
+  mentiam (fórmula de score, filas, schemas, "rollback", `/search` inexistente). Agora o da raiz
+  é a referência, o do backend cobre só desenvolvimento e o do frontend explica o build.
+  `test_docs.py` amarra a tabela de endpoints às rotas reais e o `backend/.env.example` aos
+  campos do `Settings` (TIE-33).
+- **Health falso e API refém do Redis.** `/health` (liveness) não depende de nada e fica fora do
+  rate limit; `/health/ready` checa Mongo (503 se fora), Redis e migrações (`degraded`, 200 —
+  503 aí travaria a primeira subida, que migra depois do `up`). O `HEALTHCHECK` da imagem usa a
+  readiness; o `worker` tem healthcheck próprio (`celery inspect ping`) e o `beat` tem
+  `disable: true` — antes os dois herdavam o curl HTTP e apareciam `unhealthy` à toa. Com o
+  Redis fora, o limiter cai para contador em memória (`in_memory_fallback_enabled`). **Não use
+  `swallow_errors`**: no slowapi 0.1.10 ele quebra o middleware. Compose não reinicia container
+  `unhealthy` — só os que terminam (TIE-38).
+- **Nada era logado.** Agora `src/infrastructure/logging_setup.py` põe API, worker e beat em JSON
+  (`LOG_FORMAT=text` para ler no terminal), com **redação na string final**: valores de
+  credenciais do `settings`, senha em URI, `Bearer`, `token=` e `/bot<token>` viram `***`.
+  Toda task loga `task.inicio`/`task.fim` (duração + contagens do retorno) via sinais do Celery;
+  toda chamada externa loga `http.chamada` (status, latência, path sem query) via
+  `http_log_hooks`. **Cliente httpx novo recebe `event_hooks=http_log_hooks("<servico>")`.** Os
+  loggers `httpx`/`httpcore` ficam em WARNING: em INFO eles imprimem a URL inteira, token
+  incluído (TIE-13).
+- **Score absoluto saturado e cego para nichos.** Views/engajamento/velocidades agora viram
+  percentil dentro da categoria (`src/domain/percentile.py`, `SCORE_NORMALIZATION=percentile`),
+  com fallback para o pool global e depois para o absoluto (`SCORE_PERCENTILE_MIN_GROUP`). Em
+  2026-09-27, nos 501 produtos reais: no modo absoluto dezenas empatavam em exatamente 40,0 (as
+  faixas de 300 mil views / 20 mil de engajamento são baixas para TikTok); com percentil só 4 do
+  top 10 se mantêm. **A escala subiu** (média 16 → 45, máximo 52 → 72): recalibre
+  `ALERT_THRESHOLD` com dados antes de confiar nos alertas. Enquanto o ML não coleta, todo
+  produto tem `category=None` e o percentil é, na prática, global (TIE-21).
+- **Upsert de produto com corrida e id de vídeo instável.** O `ProductRepo.upsert` lia e depois
+  gravava: a coleta que perdia uma corrida devolvia um UUID nunca gravado (métricas órfãs, série
+  partida). Agora é `find_one_and_update` atômico, com uma nova tentativa em `DuplicateKeyError`.
+  O TikTok usava a URL como id quando faltava `id`; agora extrai o id numérico da URL e descarta
+  o item sem nenhum dos dois. **Chave de dedupe = `(source, source_product_id)`**; `product_id` é
+  o UUID interno; `canonical_id` é para casar entre fontes (TIE-18), não para dedupe; **não existe
+  campo `uuid`**. Em 2026-09-27: 0 duplicados nos 501 produtos reais (TIE-19).
+- **LLM chamado a cada 30 min mesmo com métricas paradas** (até 2.400/dia). O engine agora
+  consulta `LLMCache` (Redis, `src/infrastructure/llm/cache.py`) com chave das **métricas brutas**
+  do produto (`src/domain/llm_cache.py`) — não do prompt, porque com percentil os componentes
+  mudam quando outros produtos mudam. Só resposta válida é cacheada; Redis fora = miss.
+  **Mudou o prompt ou o schema de resposta? Suba `PROMPT_VERSION`** em `llm_cache.py`, senão o
+  cache devolve análise do prompt antigo por até `LLM_CACHE_TTL_HOURS` (TIE-25).
+- **Listagens sem paginação real.** `/rankings/latest` e `/insights/latest` agora paginam por
+  cursor opaco (`apps/api/pagination.py`), com desempate estável (`product_id` no ranking, `_id`
+  nos insights) para não repetir nem pular item entre páginas. Índice `(window_hours, ts)` em
+  `trend_insights` (migração `v006`), conferido com `explain()` no Mongo real. O dashboard tem
+  "Carregar mais" (TIE-32).
+- **Filtro de período do dashboard sempre vazio fora de 72 h.** A API exigia
+  `window_hours == hours`, mas o beat analisa sempre com janela de 72 h — 24/48/168 h davam lista
+  vazia. Agora `hours` é só recência e `window_hours` é filtro opcional explícito (índices `ts` e
+  `(window_hours, ts)` na v006). O dashboard ganhou ordenação por coluna, estados explícitos de
+  carregando/vazio/erro e mensagens de erro acionáveis (rede/CORS, 401, 429, 5xx com `detail`);
+  a lógica fica em `frontend/src/ranking.js` e tem testes vitest (`npm test`, no CI) (TIE-28).
+- **Drawer de produto frágil.** Um 404 no insight (produto ainda não analisado) derrubava o
+  `Promise.all` e escondia até a curva; métrica ausente (preço no TikTok) era plotada como 0; o
+  eixo só tinha `HH:MM` numa janela de 72 h; dados do produto anterior ficavam na tela. Agora
+  curva e insight carregam independentes (`allSettled`, 404 → "ainda não analisado"), lacunas em
+  vez de zero, rótulo `dd/MM HH:mm`, breakdown numérico/IA/final com os pesos do insight e aviso
+  quando o LLM caiu. Lógica em `frontend/src/drawer.js`, com testes (TIE-29).
+- **Falha prolongada queimava cota a cada ciclo.** `src/infrastructure/circuit_breaker.py`: um
+  circuito por serviço (`mercadolivre`, `apify`, `llm`), estado no Redis (`breaker:<serviço>`)
+  compartilhado entre processos, fail-open se o Redis cair. Coleta com circuito aberto devolve
+  `circuit_open`; o LLM é embrulhado em `BreakerLLMClient` (resposta fora do schema **não**
+  conta como falha). Com o 429 atual, o ciclo passa de 50 chamadas para 5. **Serviço externo
+  novo ganha seu breaker** e entra em `SERVICES` (TIE-37).
+- **Falha silenciosa do sistema.** `apps/worker/tasks_health.py` roda a cada 15 min (fila
+  `celery`) e checa: coleta parada por fonte ativa, análise parada, taxa de fallback do LLM,
+  filas do Celery e backup (collection `backups`). Alertas vão para
+  `TELEGRAM_SYSTEM_CHAT_ID` — **separado** do chat de tendências; sem ele, só log `ERROR`. Cada
+  check tem cooldown (`HEALTH_ALERT_COOLDOWN_HOURS`) e avisa "✅ normalizado" quando some. No
+  primeiro teste contra os dados reais acusou TikTok parado há 64 h, ML nunca coletado e LLM 100%
+  em fallback (TIE-39).
+- **Não havia backup.** Serviço `backup` (imagem `mongo:7`) roda `infra/backup/backup.sh`:
+  dump atômico, `.counts.json` como gabarito, retenção com mínimo garantido, registro em
+  `backups` (alimenta o check de saúde). `restore_test.sh` restaura num Mongo **descartável** e
+  confere contagens — em 2026-09-27 restaurou 10.781 documentos com todas as contagens batendo.
+  **O `mongodump` 100.x escreve o namespace entre crases** (`` done dumping `trends.metrics` ``):
+  a 1ª versão do script assumia sem crase e gerava gabarito vazio — o stub do teste usa o
+  formato real. Destino fora da máquina ainda depende de escolha do usuário (TIE-35).
+- **Métricas do TikTok sempre zeradas.** O `clockworks~tiktok-scraper` passou a devolver
+  `playCount`/`diggCount`/`commentCount`/`shareCount` no primeiro nível do item (`stats` vem
+  `None`), e `_normalize_item` só lia `stats`. Agora aceita os dois formatos; o teste usa um
+  item real do actor. Se o actor mudar de novo, o sintoma é `views`/`engagement` = 0.
 
 ---
 
@@ -182,6 +361,8 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
 
 1. Antes de mudar comportamento, leia o teste correspondente em `src/tests/`.
 2. Mudou lógica de domínio? Teste primeiro, implementação depois.
-3. Rode `pytest src/tests -q` e `ruff check .` antes de dizer que terminou.
+3. Rode `pytest src/tests -q` e `ruff check .` antes de dizer que terminou. O CI roda com
+   `--cov` e falha abaixo de `fail_under` (em `pyproject.toml`, hoje 85%, só código de
+   produção). Subiu a cobertura? Suba o piso; nunca o baixe para passar.
 4. Descobriu uma armadilha nova ou corrigiu uma da lista acima? **Atualize este arquivo.**
 5. Não faça commit nem push sem eu pedir.

@@ -1,19 +1,17 @@
 # src/infrastructure/collectors/mercado_livre.py
 
 from __future__ import annotations
+
+import json
 import logging
-import os
-import time
-from typing import Dict, Any, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 import httpx
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
-)
+
+from src.infrastructure.collectors.http_policy import RateLimiter, retry_transient
+from src.infrastructure.config import settings
+from src.infrastructure.logging_setup import http_log_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +21,15 @@ class MercadoLivreCollector:
     Coletor Mercado Livre baseado em /highlights (mais vendidos por categoria),
     depois consulta /items em batch para enriquecer.
 
-    Env:
+    Config (via `settings`):
       ML_BASE_URL (default: https://api.mercadolibre.com)
       ML_SITE_ID  (default: MLB)
 
     Features:
-      - Retry automático com backoff exponencial
+      - Retry só em erro transitório (429/5xx/timeout), respeitando Retry-After
+      - Teto de requisições por minuto (ML_MAX_REQUESTS_PER_MINUTE)
+      - `errors` conta as chamadas que falharam de vez, para a task não
+        reportar sucesso numa coleta que não trouxe nada (TIE-17)
       - Batch de items (até 20 por request)
       - Context manager para gerenciamento de recursos
       - Logging estruturado de erros
@@ -38,19 +39,24 @@ class MercadoLivreCollector:
 
     def __init__(
         self,
-        categories: List[str],
+        categories: list[str],
         *,
         timeout_s: int = 20,
-        sleep_s: float = 0.05,
         max_items_per_category: int = 20,
+        max_requests_per_minute: int | None = None,
+        transport: httpx.BaseTransport | None = None,
     ):
-        self.base_url = os.getenv("ML_BASE_URL", "https://api.mercadolibre.com").rstrip("/")
-        self.site_id = os.getenv("ML_SITE_ID", "MLB")
+        self.base_url = settings.ML_BASE_URL.rstrip("/")
+        self.site_id = settings.ML_SITE_ID
         self.categories = [c for c in categories if c]
-        self.sleep_s = max(0.0, float(sleep_s))
         self.max_items_per_category = int(max_items_per_category)
+        if max_requests_per_minute is None:
+            max_requests_per_minute = settings.ML_MAX_REQUESTS_PER_MINUTE
+        self._limiter = RateLimiter(max_requests_per_minute)
+        self.errors = 0
         self._timeout_s = timeout_s
-        self._client: Optional[httpx.Client] = None
+        self._transport = transport  # injetável nos testes
+        self._client: httpx.Client | None = None
 
     @property
     def client(self) -> httpx.Client:
@@ -59,47 +65,42 @@ class MercadoLivreCollector:
             self._client = httpx.Client(
                 timeout=self._timeout_s,
                 headers={"User-Agent": "bot-trends/1.0 (pymongo; celery; fastapi)"},
+                transport=self._transport,
+                event_hooks=http_log_hooks("mercadolivre"),
             )
         return self._client
 
-    def __enter__(self) -> "MercadoLivreCollector":
+    def __enter__(self) -> MercadoLivreCollector:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         self.close()
         return False
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True,
-    )
-    def _get_highlights_item_ids(self, category_id: str) -> List[str]:
-        """Busca IDs dos produtos em destaque de uma categoria."""
-        url = f"{self.base_url}/highlights/{self.site_id}/category/{category_id}"
+    def _get(self, url: str) -> httpx.Response:
+        """GET com teto de taxa; levanta HTTPStatusError em resposta de erro."""
+        self._limiter.wait()
         r = self.client.get(url)
         r.raise_for_status()
-        data = r.json()
+        return r
+
+    @retry_transient(attempts=3, min_s=1, max_s=10)
+    def _get_highlights_item_ids(self, category_id: str) -> list[str]:
+        """Busca IDs dos produtos em destaque de uma categoria."""
+        url = f"{self.base_url}/highlights/{self.site_id}/category/{category_id}"
+        data = self._get(url).json()
 
         # Formato típico: {"content":[{"id":"MLB....","type":"ITEM"}, ...]}
         content = data.get("content", []) or []
-        ids: List[str] = []
+        ids: list[str] = []
         for it in content:
             if it.get("type") == "ITEM" and it.get("id"):
                 ids.append(it["id"])
 
         return ids[: self.max_items_per_category]
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=5),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True,
-    )
-    def _get_items_batch(self, item_ids: List[str]) -> List[Dict[str, Any]]:
+    @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
+    def _get_items_batch(self, item_ids: list[str]) -> list[dict[str, Any]]:
         """
         Busca múltiplos items em uma única request (até 20).
         Retorna lista de items válidos.
@@ -109,10 +110,9 @@ class MercadoLivreCollector:
 
         ids_param = ",".join(item_ids[: self.BATCH_SIZE])
         url = f"{self.base_url}/items?ids={ids_param}"
-        r = self.client.get(url)
-        r.raise_for_status()
+        r = self._get(url)
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for item_response in r.json():
             if item_response.get("code") == 200:
                 body = item_response.get("body")
@@ -124,7 +124,7 @@ class MercadoLivreCollector:
 
         return results
 
-    def _normalize_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_item(self, item: dict[str, Any]) -> dict[str, Any]:
         """Normaliza um item do ML para o formato interno."""
         # Brand costuma vir em attributes; não é garantido
         brand = None
@@ -150,7 +150,7 @@ class MercadoLivreCollector:
             },
         }
 
-    def collect(self) -> Iterable[Dict[str, Any]]:
+    def collect(self) -> Iterable[dict[str, Any]]:
         """
         Yield de itens normalizados.
 
@@ -170,15 +170,14 @@ class MercadoLivreCollector:
           }
         """
         total_collected = 0
-        total_errors = 0
 
         for cat in self.categories:
             try:
                 item_ids = self._get_highlights_item_ids(cat)
                 logger.info(f"Categoria {cat}: {len(item_ids)} items encontrados")
-            except (httpx.HTTPError, httpx.TimeoutException) as e:
+            except (httpx.HTTPError, json.JSONDecodeError) as e:
                 logger.warning(f"Falha ao buscar highlights da categoria {cat}: {e}")
-                total_errors += 1
+                self.errors += 1
                 continue
 
             # Processa em batches de 20 (limite da API)
@@ -187,19 +186,16 @@ class MercadoLivreCollector:
 
                 try:
                     items = self._get_items_batch(batch_ids)
-                except (httpx.HTTPError, httpx.TimeoutException) as e:
+                except (httpx.HTTPError, json.JSONDecodeError) as e:
                     logger.warning(f"Falha ao buscar batch de items: {e}")
-                    total_errors += 1
+                    self.errors += 1
                     continue
 
                 for item in items:
                     yield self._normalize_item(item)
                     total_collected += 1
 
-                if self.sleep_s:
-                    time.sleep(self.sleep_s)
-
-        logger.info(f"Coleta finalizada: {total_collected} items, {total_errors} erros")
+        logger.info(f"Coleta finalizada: {total_collected} items, {self.errors} erros")
 
     def close(self) -> None:
         """Fecha o client HTTP de forma segura."""

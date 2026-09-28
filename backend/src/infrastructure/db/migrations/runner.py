@@ -2,17 +2,21 @@
 
 import datetime as dt
 import socket
-from typing import List
+
 from pymongo import ReturnDocument
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
+
+from src.infrastructure.utils.datetime_utils import utcnow
+
 from .migration_base import Migration
 
 MIGRATIONS_COLLECTION = "migrations"
 LOCK_COLLECTION = "migration_lock"
 
+
 class MigrationRunner:
-    def __init__(self, db: Database, migrations: List[Migration]):
+    def __init__(self, db: Database, migrations: list[Migration]):
         self.db = db
         self.migrations = migrations
 
@@ -21,11 +25,20 @@ class MigrationRunner:
         self.db[LOCK_COLLECTION].create_index("lock_key", unique=True)
 
     def _acquire_lock(self, ttl_seconds: int = 600) -> bool:
-        now = dt.datetime.utcnow()
+        now = utcnow()
         expires_at = now + dt.timedelta(seconds=ttl_seconds)
         host = socket.gethostname()
 
-        res = self.db[LOCK_COLLECTION].find_one_and_update(
+        try:
+            res = self._upsert_lock(now, expires_at, host)
+        except DuplicateKeyError:
+            # Lock válido de outra instância: o filtro não casa, o upsert tenta
+            # inserir um segundo "global" e o índice único recusa.
+            return False
+        return res is not None and res.get("owner") == host
+
+    def _upsert_lock(self, now, expires_at, host):
+        return self.db[LOCK_COLLECTION].find_one_and_update(
             {
                 "lock_key": "global",
                 "$or": [
@@ -45,7 +58,6 @@ class MigrationRunner:
             upsert=True,
             return_document=ReturnDocument.AFTER,
         )
-        return res is not None and res.get("owner") == host
 
     def _release_lock(self):
         host = socket.gethostname()
@@ -62,7 +74,9 @@ class MigrationRunner:
         self._ensure_collections()
 
         if not self._acquire_lock():
-            raise RuntimeError("Não foi possível adquirir lock de migração (outra instância executando).")
+            raise RuntimeError(
+                "Não foi possível adquirir lock de migração (outra instância executando)."
+            )
 
         try:
             for m in self.migrations:
@@ -70,7 +84,7 @@ class MigrationRunner:
                 if self._is_applied(mid):
                     continue
 
-                started = dt.datetime.utcnow()
+                started = utcnow()
                 record = {
                     "migration_id": mid,
                     "from_version": m.meta.from_version,
@@ -92,13 +106,13 @@ class MigrationRunner:
 
                 try:
                     m.up(self.db)
-                    finished = dt.datetime.utcnow()
+                    finished = utcnow()
                     self.db[MIGRATIONS_COLLECTION].update_one(
                         {"migration_id": mid},
                         {"$set": {"status": "applied", "finished_at": finished}},
                     )
                 except Exception as e:
-                    finished = dt.datetime.utcnow()
+                    finished = utcnow()
                     self.db[MIGRATIONS_COLLECTION].update_one(
                         {"migration_id": mid},
                         {"$set": {"status": "failed", "finished_at": finished, "error": str(e)}},

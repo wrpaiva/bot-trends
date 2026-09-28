@@ -1,15 +1,21 @@
 # src/infrastructure/db/migrations/versions/v002_add_canonical_id.py
 
+
 import re
-import datetime as dt
+
 from pymongo.database import Database
+
+from src.infrastructure.utils.datetime_utils import utcnow
+
 from ..migration_base import Migration, MigrationMeta
+
 
 def slugify(text: str) -> str:
     text = (text or "").lower().strip()
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"[^a-z0-9 ]+", "", text)
     return text.replace(" ", "-")[:80]
+
 
 class V002AddCanonicalAndSchemaVersion(Migration):
     meta = MigrationMeta(
@@ -21,7 +27,7 @@ class V002AddCanonicalAndSchemaVersion(Migration):
 
     def up(self, db: Database) -> None:
         products = db["products"]
-        now = dt.datetime.utcnow()
+        now = utcnow()
 
         products.update_many(
             {"schema_version": {"$exists": False}},
