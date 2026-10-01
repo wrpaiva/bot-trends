@@ -162,16 +162,21 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    Para valer: `docker compose down && docker volume rm trends_mongo_data`.
 4. **`http://localhost:80` não é uma origem válida.** Na porta 80 o browser envia
    `http://localhost`, sem a porta. Com `:80` explícito em `CORS_ORIGINS` o preflight falha.
-5. **O LLM nunca funcionou nesta instalação.** Em 2026-09-27, os 9.050 insights gravados caíram
-   no fallback numérico: 9.045 com `429 Too Many Requests` da OpenAI e 5 com timeout — nenhum
-   tem `llm_score > 0`. 429 constante costuma ser **cota/crédito esgotado** na conta, não rate
-   limit. Até resolver, `final_score` = score numérico e a análise/recomendação no dashboard é
-   o texto do fallback. Confira com: `db.trend_insights.countDocuments({"llm_score": {$gt: 0}})`.
+5. **O LLM ainda não gerou nenhum insight nesta instalação.** Em 2026-09-27, os 9.050 insights
+   gravados caíram no fallback numérico: 9.045 com `429 Too Many Requests` da OpenAI e 5 com
+   timeout. 429 constante costuma ser **cota/crédito esgotado** na conta, não rate limit.
+   **Em 2026-10-01 a chave nova respondeu `200`** (chamada mínima ao `gpt-4.1-mini` de dentro do
+   worker), mas continua sem nenhum insight com `llm_score > 0`: sem coleta (item 6) a análise
+   não tem métricas na janela e não grava nada. Até o primeiro insight com LLM, `final_score` =
+   score numérico. Confira com: `db.trend_insights.countDocuments({"llm_score": {$gt: 0}})`.
 6. **A coleta do TikTok está parada desde ~2026-09-25: crédito da Apify esgotado.** O actor
    devolve `402 Payment Required` a cada ciclo. O worker com o código antigo retentava e
    devolvia `status: ok, inserted: 0` — ninguém viu por 2,7 dias (achado pelo check de saúde da
    TIE-39). Com a análise rodando sobre métricas cada vez mais velhas, o ranking congela e, em
-   72 h, esvazia. Recarregar créditos ou trocar de plano na Apify destrava.
+   72 h, esvazia (último insight: 2026-09-28). **Saldo aparente não basta:** em 2026-10-01 a conta
+   mostrava US$ 4,56 de US$ 5 usados (ciclo 24/09–23/10) e o actor ainda devolvia 402 — com
+   pouco saldo a Apify recusa a execução. Upgrade de plano ou recarga destrava; sem isso, só na
+   virada do ciclo. Saldo da conta (grátis): `GET https://api.apify.com/v2/users/me/limits`.
 7. **As hashtags do TikTok definem o que o motor monitora.** `fyp` trazia conteúdo global e
    antigo (vídeos em árabe, de 2022); desde 2026-09-24 o `backend/.env` usa
    `tiktokmademebuyit,achadinhos,achadosdashopee`. **Custo:** ~US$ 0,0037 por vídeo
@@ -180,6 +185,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    disso eram 50 vídeos a cada 30 min, e uma noite consumiu US$ 3,55 dos US$ 5 do plano
    gratuito. Ao mexer em `main.py`, confira o agendamento **dentro** do container do beat —
    já aconteceu de ele continuar com a imagem antiga depois de um `up -d --build`.
+8. **O backup não roda se o Docker criar `./backups`.** Sem a pasta no host, o Docker cria o
+   bind mount como `root`, e o serviço `backup` roda como `BACKUP_UID` (1000): todo ciclo falha
+   com `permission denied` no `mongodump`. Aconteceu em 2026-09-28 e passou 3 dias sem ninguém
+   ver — o check de saúde detectou, mas sem `TELEGRAM_SYSTEM_CHAT_ID` o alerta só vai para o
+   log. Crie a pasta antes do primeiro `up`. Sem sudo, devolva o dono com
+   `docker run --rm -v "$PWD/backups:/b" mongo:7 chown 1000:1000 /b` e rode um ciclo com
+   `docker compose exec backup bash /backup/backup.sh`. Corrigido assim em 2026-10-01 (dump de
+   11.505 documentos, `restore_test.sh` com todas as contagens batendo).
 
 ## Já corrigido (não reintroduzir)
 
