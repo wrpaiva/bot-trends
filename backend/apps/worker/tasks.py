@@ -103,7 +103,8 @@ def collect_ml():
                         "ts": now,
                         "product_id": product_id,
                         "source": "mercadolivre",
-                        "rank_position": None,
+                        # Posição no /highlights da categoria (TIE-16)
+                        "rank_position": item.get("rank_position"),
                         "price": item.get("price"),
                         "reviews_total": None,
                         "reviews_delta": 0,

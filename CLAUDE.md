@@ -152,8 +152,10 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    do collector muda e a Fase 2 fica maior. O refresh token é de **uso único**: nunca renove
    fora de `MercadoLivreAuth` (ele grava o par novo com compare-and-set no Mongo, `ml_oauth`);
    um refresh "de teste" à mão invalida o token do worker.
-2. **`rank_momentum` e `reviews_velocity` estão hardcoded em `0.0`** em `tasks_trend.py`,
-   ou seja 35% do score numérico é sempre zero (TIE-16). E boa parte do topo do ranking é
+2. **`reviews_velocity` está hardcoded em `0.0`** em `tasks_trend.py` (TIE-16). O
+   `rank_momentum` é calculado (`src/domain/rank_momentum.py`, posição no `/highlights`), mas
+   só item do ML tem ranking — vídeo do TikTok fica em 0, e o ML ainda não coleta (TIE-41):
+   na prática, 35% do score numérico segue zero. **Ainda não validado com dados reais.** E boa parte do topo do ranking é
    conteúdo sem produto (dança, meme de `#fyp`) — resolvido pelo filtro comercial (ver "Já
    corrigido"); o vínculo TikTok ↔ produto do ML continua pendente (TIE-18).
 3. **`MONGO_PASSWORD` só vale na primeira subida do volume.** `MONGO_INITDB_ROOT_PASSWORD` é
@@ -327,7 +329,7 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   foi recalibrado de 85 (inalcançável: teto ~80,5 com `rank`/`reviews` zerados) para 60 em
   2026-10-03, com replay das leituras reais — racional no README, "Alertas". No mesmo dia a
   classificação do fallback sem LLM foi de 75/85 para 60/66 (`fallback_classification` em
-  `scoring.py`). **Ligou a TIE-16? O teto sobe: recalibre os dois.** Enquanto o ML não coleta, todo
+  `scoring.py`). **Quando o ML coletar, item com subida no ranking passa do teto: recalibre os dois.** Enquanto o ML não coleta, todo
   produto tem `category=None` e o percentil é, na prática, global (TIE-21).
 - **Upsert de produto com corrida e id de vídeo instável.** O `ProductRepo.upsert` lia e depois
   gravava: a coleta que perdia uma corrida devolvia um UUID nunca gravado (métricas órfãs, série
