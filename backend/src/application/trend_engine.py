@@ -6,7 +6,7 @@ import logging
 
 from src.application.prompt_builder import build_trend_prompt
 from src.domain.interfaces import LLMCache, LLMClient
-from src.domain.llm_cache import llm_cache_key
+from src.domain.llm_cache import PROMPT_VERSION, llm_cache_key
 from src.domain.percentile import Normalization
 from src.domain.scoring import HybridWeights, NumericScoreStrategy, clamp
 from src.domain.trend_models import HybridResult, TrendInput
@@ -60,7 +60,7 @@ class HybridTrendEngine:
 
         try:
             if llm_res is None:
-                prompt = build_trend_prompt(ti, numeric_res)
+                prompt = build_trend_prompt(ti, normalization)
                 llm_res = self.llm.analyze_trend(prompt["system"], prompt["user"])
                 if key is not None:
                     try:
@@ -91,6 +91,8 @@ class HybridTrendEngine:
                     "numeric_components": numeric_res.components,
                     "llm_confidence": llm_res.confidence_0_1,
                     "llm_cached": cached,
+                    # A chave do cache inclui a versão: acerto também é desta versão
+                    "prompt_version": PROMPT_VERSION,
                 },
             )
 
@@ -114,5 +116,6 @@ class HybridTrendEngine:
                 "numeric_components": numeric_res.components,
                 "llm_error": llm_error,
                 "llm_cached": False,
+                "prompt_version": None,
             },
         )

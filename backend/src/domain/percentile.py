@@ -14,8 +14,10 @@ Fallback, nesta ordem:
 
 from __future__ import annotations
 
+import math
+import statistics
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .trend_models import TrendInput
 
@@ -46,10 +48,19 @@ def percentile_rank(value: float, population: list[float]) -> float:
     return (abaixo + 0.5 * iguais) / n
 
 
+def nearest_rank(population: list[float], q: float) -> float:
+    """Percentil q (0..1) pelo método do posto mais próximo: sempre um valor observado."""
+    ordenada = sorted(population)
+    return ordenada[max(math.ceil(q * len(ordenada)), 1) - 1]
+
+
 @dataclass(frozen=True)
 class Normalization:
     values: dict[str, float]
     basis: str  # "categoria" | "global"
+    # TIE-26: referência do grupo para o LLM comparar o produto com os pares
+    pool_size: int = 0
+    reference: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 class PercentileContext:
@@ -71,10 +82,16 @@ class PercentileContext:
         else:
             return None
 
+        populacao = {m: [_valor(x, m) for x in pool] for m in PERCENTILE_METRICS}
         return Normalization(
-            values={
-                m: percentile_rank(_valor(ti, m), [_valor(x, m) for x in pool])
-                for m in PERCENTILE_METRICS
-            },
+            values={m: percentile_rank(_valor(ti, m), populacao[m]) for m in PERCENTILE_METRICS},
             basis=basis,
+            pool_size=len(pool),
+            reference={
+                m: {
+                    "mediana": float(statistics.median(pop)),
+                    "p90": float(nearest_rank(pop, 0.9)),
+                }
+                for m, pop in populacao.items()
+            },
         )

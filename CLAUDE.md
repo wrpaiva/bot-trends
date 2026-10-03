@@ -162,13 +162,18 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    Para valer: `docker compose down && docker volume rm trends_mongo_data`.
 4. **`http://localhost:80` não é uma origem válida.** Na porta 80 o browser envia
    `http://localhost`, sem a porta. Com `:80` explícito em `CORS_ORIGINS` o preflight falha.
-5. **O LLM ainda não gerou nenhum insight nesta instalação.** Em 2026-09-27, os 9.050 insights
-   gravados caíram no fallback numérico: 9.045 com `429 Too Many Requests` da OpenAI e 5 com
-   timeout. 429 constante costuma ser **cota/crédito esgotado** na conta, não rate limit.
-   **Em 2026-10-01 a chave nova respondeu `200`** (chamada mínima ao `gpt-4.1-mini` de dentro do
-   worker), mas continua sem nenhum insight com `llm_score > 0`: sem coleta (item 6) a análise
-   não tem métricas na janela e não grava nada. Até o primeiro insight com LLM, `final_score` =
-   score numérico. Confira com: `db.trend_insights.countDocuments({"llm_score": {$gt: 0}})`.
+5. **O LLM se ancora em qualquer número pronto que estiver no prompt.** Até 2026-09-27 todo
+   insight caiu no fallback (`429` = cota esgotada na OpenAI). Em 2026-10-01, com chave nova, os
+   primeiros 20 insights com LLM (prompt v2) tinham `llm_score` a ±0,4 do numérico em todos: o
+   prompt mandava `numeric_score.score_0_100` e o modelo copiava. A TIE-26 (prompt v4) tirou o
+   score pronto e o `previous_final_score`, mandou a referência do grupo (mediana/p90), o
+   marcador comercial e o nº de leituras, e trouxe few-shot. Nos mesmos 20 vídeos: diferença
+   média llm×numérico 0,2 → 4,8 (máx. 0,4 → 23), escala 25–58 → 15–75, recomendações do ponto
+   de vista de quem compra. **Duas armadilhas do prompt:** `social_velocity` nunca é negativo e
+   vale 0 com leitura única ("não medido", não "parado"); e com só um exemplo de `EM_QUEDA` (vídeo
+   velho) o modelo marcou queda em vídeo de 5 h sem tração — daí o exemplo "novo sem tração =
+   ESTAVEL". Não volte a pôr score pronto no prompt. Mexeu no prompt? Suba `PROMPT_VERSION`
+   (`src/domain/llm_cache.py`); o insight grava `prompt_version`. Revalide com dados reais.
 6. **A coleta do TikTok está parada desde ~2026-09-25: crédito da Apify esgotado.** O actor
    devolve `402 Payment Required` a cada ciclo. O worker com o código antigo retentava e
    devolvia `status: ok, inserted: 0` — ninguém viu por 2,7 dias (achado pelo check de saúde da

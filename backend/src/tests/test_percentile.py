@@ -93,6 +93,22 @@ def test_normalize_devolve_percentis_e_a_base():
     assert norm.values["views_per_hour"] == 0.9
 
 
+def test_normalize_traz_a_referencia_do_grupo():
+    # TIE-26: o LLM compara o produto com a mediana e o p90 do mesmo grupo
+    ctx = PercentileContext(CELULARES + CAPINHAS, min_group=5)
+    norm = ctx.normalize(CAPINHAS[-1])
+    assert norm.pool_size == 5
+    assert norm.reference["views_per_hour"] == {"mediana": 1_000.0, "p90": 5_000.0}
+    assert set(norm.reference) == set(PERCENTILE_METRICS)
+
+
+def test_referencia_usa_o_pool_global_quando_a_categoria_eh_pequena():
+    raro = _ti("raro", "drones", 30_000)
+    norm = PercentileContext(CELULARES + CAPINHAS + [raro], min_group=5).normalize(raro)
+    assert norm.basis == "global"
+    assert norm.pool_size == 11
+
+
 def test_categoria_pequena_cai_no_pool_global():
     raro = _ti("raro", "drones", 30_000)
     ctx = PercentileContext(CELULARES + CAPINHAS + [raro], min_group=5)
