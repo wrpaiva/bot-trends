@@ -221,7 +221,7 @@ não sobe). Cada insight grava os pesos usados em `score_weights`.
 
 | Componente | Peso | Normalização |
 |---|---|---|
-| `rank_momentum` | 0,20 | já vem em 0–1 |
+| `rank_momentum` | 0,20 | subida no `/highlights` do ML entre a leitura mais antiga e a mais recente da janela, em escala log (20º → 1º = 1; parado, caindo ou sem ranking — TikTok — = 0) |
 | `reviews_velocity` | 0,15 | percentil na categoria (ou 0–50 reviews) |
 | aceleração (`social_velocity`) | 0,25 | quanto o ritmo entre as 2 últimas leituras supera o ritmo médio de vida; 0 com leitura única ou abaixo de 1.000 views |
 | views por hora de vida | 0,15 | percentil na categoria (ou escala log até 100 mil/h no modo absoluto) |
@@ -250,8 +250,9 @@ celular. Categoria com menos de `SCORE_PERCENTILE_MIN_GROUP` (5) produtos usa o 
 ciclo; pool global menor que isso volta à normalização `absolute` (as faixas da tabela). Cada
 insight grava a base usada em `debug.numeric_components.normalization`.
 
-> `rank_momentum` e `reviews_velocity` ainda são fixos em `0.0` (dependem da coleta do ML,
-> TIE-16) — hoje 35% do score numérico é sempre zero.
+> `reviews_velocity` ainda é fixo em `0.0` (TIE-16). `rank_momentum` é calculado, mas só existe
+> para item do ML — que ainda não coleta (TIE-41) —, então hoje 35% do score numérico de um vídeo
+> do TikTok continua zero.
 
 ### LLM
 
@@ -281,7 +282,8 @@ final_score = SCORE_W_NUMERIC × score_numérico + SCORE_W_LLM × score_llm     
 
 Se o LLM falhar, não estiver configurado ou responder fora do formato, o `final_score` é só o
 numérico, e a classificação sai do numérico (≥ 60 `SUBINDO`, ≥ 66 `VIRALIZANDO`; cortes
-abaixo do teto de ~67,5 enquanto a TIE-16 não liga `rank`/`reviews` — eram 75/85, inalcançáveis).
+abaixo do teto de ~67,5 de um vídeo do TikTok, que não tem ranking nem reviews — eram 75/85,
+inalcançáveis).
 
 ### Alertas
 
@@ -290,13 +292,13 @@ realerta depois de `ALERT_COOLDOWN_HOURS` (default 24) — ou antes, se a classi
 faixa (ex.: `SUBINDO` → `VIRALIZANDO`). Falha no envio não interrompe a análise; o alerta é
 tentado de novo no próximo ciclo.
 
-**Por que 60** (calibrado em 2026-10-03): enquanto `rank_momentum` e `reviews_velocity` valem
-0 (TIE-16), o numérico não passa de ~67,5 e o final de ~80,5 — o antigo 85 nunca disparava.
+**Por que 60** (calibrado em 2026-10-03): sem `rank_momentum` e `reviews_velocity` (vídeo do
+TikTok não tem ranking nem reviews; TIE-16), o numérico não passa de ~67,5 e o final de ~80,5 — o antigo 85 nunca disparava.
 Reprocessando com o motor atual as leituras reais do TikTok (24–25/09, 13 ciclos, 55 vídeos
 comerciais), o numérico teve p50 39, p90 52, p95 53 e só 4 vídeos passaram de 60. Nos 20
 insights com LLM (prompt v4), 60 deixa passar só o único `SUBINDO` (final 64,7): o LLM
-derruba os outros dois que tinham numérico acima de 60. Quando a TIE-16 ligar os dois
-componentes, o teto sobe — recalibre.
+derruba os outros dois que tinham numérico acima de 60. Item do ML com subida no ranking pode
+ir além do teto de ~67,5: quando o ML coletar (TIE-41), recalibre com os dados dele.
 
 ---
 

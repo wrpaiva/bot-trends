@@ -369,3 +369,28 @@ def test_numero_de_leituras_chega_ao_prompt(db):
 
     # A fixture grava uma métrica por produto
     assert all('"leituras": 1' in p for p in _LLM.prompts)
+
+
+def test_rank_momentum_vem_das_posicoes_do_ml(db):
+    # TIE-16: subiu de 20º para 1º na janela → nm_rank = 1; o TikTok, sem
+    # ranking, continua 0
+    agora = utcnow()
+    db["products"].insert_one({"product_id": "ml1", "title": "Air fryer", "source": "mercadolivre"})
+    for horas, pos in ((30, 20), (18, 9), (6, 1)):
+        db["metrics"].insert_one(
+            {
+                "product_id": "ml1",
+                "ts": agora - dt.timedelta(hours=horas),
+                "source": "mercadolivre",
+                "rank_position": pos,
+                "price": 300.0,
+            }
+        )
+
+    mod.hybrid_trend_analyze(hours=72)
+
+    nm_rank = {
+        i["product_id"]: i["debug"]["numeric_components"]["nm_rank"]
+        for i in db["trend_insights"].find()
+    }
+    assert nm_rank == {"ml1": pytest.approx(1.0), "p1": 0.0, "p2": 0.0}

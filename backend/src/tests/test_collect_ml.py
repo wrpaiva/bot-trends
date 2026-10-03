@@ -147,3 +147,16 @@ def test_falha_de_token_vira_erro_com_motivo(db):
 
     assert res["status"] == "error"
     assert res["reason"] == "nenhum token do Mercado Livre gravado"
+
+
+def test_grava_a_posicao_no_ranking(db):
+    # TIE-16: antes era sempre None
+    _FakeCollector.itens = [dict(_item(1), rank_position=4), _item(2)]
+    _FakeCollector.erros = 0
+
+    tasks_mod.collect_ml()
+
+    posicoes = sorted(
+        (m["rank_position"] is None, m["rank_position"]) for m in db["metrics"].find()
+    )
+    assert posicoes == [(False, 4), (True, None)]

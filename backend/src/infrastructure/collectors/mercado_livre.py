@@ -108,19 +108,26 @@ class MercadoLivreCollector:
         return self.client.get(url, headers=headers)
 
     @retry_transient(attempts=3, min_s=1, max_s=10)
-    def _get_highlights_item_ids(self, category_id: str) -> list[str]:
-        """Busca IDs dos produtos em destaque de uma categoria."""
+    def _get_highlights(self, category_id: str) -> dict[str, int]:
+        """
+        Itens em destaque (mais vendidos) de uma categoria: id → posição no
+        ranking (1 = primeiro), na ordem do ranking. A posição alimenta o
+        `rank_momentum` (TIE-16).
+        """
         url = f"{self.base_url}/highlights/{self.site_id}/category/{category_id}"
         data = self._get(url).json()
 
-        # Formato típico: {"content":[{"id":"MLB....","type":"ITEM"}, ...]}
+        # Formato típico: {"content":[{"id":"MLB....","type":"ITEM","position":1}, ...]}
+        # Sem `position`, vale a ordem da lista (que já é a do ranking)
         content = data.get("content", []) or []
-        ids: list[str] = []
-        for it in content:
+        posicoes: dict[str, int] = {}
+        for ordem, it in enumerate(content, start=1):
             if it.get("type") == "ITEM" and it.get("id"):
-                ids.append(it["id"])
+                posicoes[it["id"]] = int(it.get("position") or ordem)
+            if len(posicoes) >= self.max_items_per_category:
+                break
 
-        return ids[: self.max_items_per_category]
+        return posicoes
 
     @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
     def _get_items_batch(self, item_ids: list[str]) -> list[dict[str, Any]]:
@@ -189,14 +196,16 @@ class MercadoLivreCollector:
             "category": "...",
             "brand": "...",
             "canonical_id": "...",
-            "marketplace": {...}
+            "marketplace": {...},
+            "rank_position": 1  # posição no /highlights da categoria
           }
         """
         total_collected = 0
 
         for cat in self.categories:
             try:
-                item_ids = self._get_highlights_item_ids(cat)
+                posicoes = self._get_highlights(cat)
+                item_ids = list(posicoes)
                 logger.info(f"Categoria {cat}: {len(item_ids)} items encontrados")
             except MLAuthError as e:
                 self._sem_token(e)
@@ -221,7 +230,10 @@ class MercadoLivreCollector:
                     continue
 
                 for item in items:
-                    yield self._normalize_item(item)
+                    # /items não garante a ordem: a posição vem do highlights
+                    yield dict(
+                        self._normalize_item(item), rank_position=posicoes.get(item.get("id"))
+                    )
                     total_collected += 1
 
         logger.info(f"Coleta finalizada: {total_collected} items, {self.errors} erros")

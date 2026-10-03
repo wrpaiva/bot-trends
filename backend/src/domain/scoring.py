@@ -74,11 +74,11 @@ class HybridWeights:
 
 
 # Classificação quando o LLM falha (só o numérico). Recalibrada em 2026-10-03:
-# com rank_momentum = 0 e reviews no percentil 0,5 (TIE-16) o teto é ~67,5, e os
+# sem ranking (vídeo do TikTok) e reviews no percentil 0,5 (TIE-16) o teto é ~67,5, e os
 # cortes antigos (75/85) deixavam tudo ESTAVEL. SUBINDO = ALERT_THRESHOLD
 # default, para o alerta do fallback não sair rotulado como ESTAVEL;
 # VIRALIZANDO exige ~p97 em todos os sinais medidos (nenhum vídeo no replay de
-# 24–25/09). Ligou a TIE-16? O teto vai a 100: recalibre.
+# 24–25/09). Item do ML que sobe no ranking passa desse teto: recalibre quando o ML coletar.
 FALLBACK_SUBINDO = 60.0
 FALLBACK_VIRALIZANDO = 66.0
 

@@ -11,6 +11,7 @@ from src.domain.alerting import decide_alert
 from src.domain.commercial import commercial_marker
 from src.domain.interfaces import LLMClient
 from src.domain.percentile import PercentileContext
+from src.domain.rank_momentum import RankReading, rank_momentum
 from src.domain.scoring import NumericScoreStrategy
 from src.domain.trend_models import LLMResult, TrendInput
 from src.domain.trend_signals import Reading, compute_signals, is_too_old
@@ -171,7 +172,11 @@ def _build_input(db, product_id: str, since: dt.datetime):
         views_24h=int(last.get("views", 0) or 0),
         engagement_24h=int(last.get("engagement", 0) or 0),
         mentions_24h=int(last.get("mentions", 0) or 0),
-        rank_momentum=0.0,
+        # Subida no ranking de mais vendidos do ML (TIE-16); TikTok não tem
+        # posição e fica em 0
+        rank_momentum=rank_momentum(
+            [RankReading(ts=ensure_utc(m["ts"]), position=m.get("rank_position")) for m in metrics]
+        ),
         reviews_velocity=0.0,
         social_velocity=sinais.social_velocity if sinais else _calc_social_velocity(metrics),
         price_volatility=_calc_price_volatility(metrics),
