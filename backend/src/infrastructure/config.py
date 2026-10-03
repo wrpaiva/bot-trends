@@ -45,8 +45,9 @@ class Settings(BaseSettings):
     HEALTH_QUEUE_MAX: int = Field(default=100, ge=1)
     HEALTH_BACKUP_MAX_AGE_HOURS: int = Field(default=26, ge=1)
 
-    # Alertas (TIE-31): score mínimo e intervalo entre alertas do mesmo produto
-    ALERT_THRESHOLD: float = 85.0
+    # Alertas (TIE-31): score mínimo e intervalo entre alertas do mesmo produto.
+    # 60 calibrado em 2026-10-03 com dados reais (ver README, "Alertas")
+    ALERT_THRESHOLD: float = 60.0
     ALERT_COOLDOWN_HOURS: int = 24
 
     # Mercado Livre
