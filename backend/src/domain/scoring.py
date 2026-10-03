@@ -73,6 +73,24 @@ class HybridWeights:
         return asdict(self)
 
 
+# Classificação quando o LLM falha (só o numérico). Recalibrada em 2026-10-03:
+# com rank_momentum = 0 e reviews no percentil 0,5 (TIE-16) o teto é ~67,5, e os
+# cortes antigos (75/85) deixavam tudo ESTAVEL. SUBINDO = ALERT_THRESHOLD
+# default, para o alerta do fallback não sair rotulado como ESTAVEL;
+# VIRALIZANDO exige ~p97 em todos os sinais medidos (nenhum vídeo no replay de
+# 24–25/09). Ligou a TIE-16? O teto vai a 100: recalibre.
+FALLBACK_SUBINDO = 60.0
+FALLBACK_VIRALIZANDO = 66.0
+
+
+def fallback_classification(numeric_score: float) -> str:
+    if numeric_score >= FALLBACK_VIRALIZANDO:
+        return "VIRALIZANDO"
+    if numeric_score >= FALLBACK_SUBINDO:
+        return "SUBINDO"
+    return "ESTAVEL"
+
+
 class NumericScoreStrategy:
     """
     Score matemático explicável (0..100), com pesos configuráveis (TIE-22).

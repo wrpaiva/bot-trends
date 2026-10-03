@@ -8,7 +8,12 @@ from src.application.prompt_builder import build_trend_prompt
 from src.domain.interfaces import LLMCache, LLMClient
 from src.domain.llm_cache import PROMPT_VERSION, llm_cache_key
 from src.domain.percentile import Normalization
-from src.domain.scoring import HybridWeights, NumericScoreStrategy, clamp
+from src.domain.scoring import (
+    HybridWeights,
+    NumericScoreStrategy,
+    clamp,
+    fallback_classification,
+)
 from src.domain.trend_models import HybridResult, TrendInput
 
 logger = logging.getLogger(__name__)
@@ -97,11 +102,7 @@ class HybridTrendEngine:
             )
 
         # fallback sem LLM
-        cls = "ESTAVEL"
-        if numeric_score >= 75:
-            cls = "SUBINDO"
-        if numeric_score >= 85:
-            cls = "VIRALIZANDO"
+        cls = fallback_classification(numeric_score)
 
         return HybridResult(
             product_id=ti.product_id,

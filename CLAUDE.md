@@ -323,8 +323,11 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   com fallback para o pool global e depois para o absoluto (`SCORE_PERCENTILE_MIN_GROUP`). Em
   2026-09-27, nos 501 produtos reais: no modo absoluto dezenas empatavam em exatamente 40,0 (as
   faixas de 300 mil views / 20 mil de engajamento são baixas para TikTok); com percentil só 4 do
-  top 10 se mantêm. **A escala subiu** (média 16 → 45, máximo 52 → 72): recalibre
-  `ALERT_THRESHOLD` com dados antes de confiar nos alertas. Enquanto o ML não coleta, todo
+  top 10 se mantêm. **A escala subiu** (média 16 → 45, máximo 52 → 72); o `ALERT_THRESHOLD`
+  foi recalibrado de 85 (inalcançável: teto ~80,5 com `rank`/`reviews` zerados) para 60 em
+  2026-10-03, com replay das leituras reais — racional no README, "Alertas". No mesmo dia a
+  classificação do fallback sem LLM foi de 75/85 para 60/66 (`fallback_classification` em
+  `scoring.py`). **Ligou a TIE-16? O teto sobe: recalibre os dois.** Enquanto o ML não coleta, todo
   produto tem `category=None` e o percentil é, na prática, global (TIE-21).
 - **Upsert de produto com corrida e id de vídeo instável.** O `ProductRepo.upsert` lia e depois
   gravava: a coleta que perdia uma corrida devolvia um UUID nunca gravado (métricas órfãs, série

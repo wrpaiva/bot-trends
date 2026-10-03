@@ -2,7 +2,7 @@
 
 from src.application.trend_engine import HybridTrendEngine
 from src.domain.interfaces import LLMClient
-from src.domain.scoring import NumericScoreStrategy
+from src.domain.scoring import NumericScoreStrategy, fallback_classification
 from src.domain.trend_models import LLMResult, TrendInput
 
 
@@ -83,3 +83,4 @@ def test_engine_fallback_when_llm_fails():
     assert res.llm_score_0_100 == 0.0
     assert res.final_score_0_100 == n
     assert "LLM indisponível" in res.analysis
+    assert res.trend_classification == fallback_classification(n)

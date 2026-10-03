@@ -280,14 +280,23 @@ final_score = SCORE_W_NUMERIC × score_numérico + SCORE_W_LLM × score_llm     
 ```
 
 Se o LLM falhar, não estiver configurado ou responder fora do formato, o `final_score` é só o
-numérico, e a classificação sai do numérico (≥ 75 `SUBINDO`, ≥ 85 `VIRALIZANDO`).
+numérico, e a classificação sai do numérico (≥ 60 `SUBINDO`, ≥ 66 `VIRALIZANDO`; cortes
+abaixo do teto de ~67,5 enquanto a TIE-16 não liga `rank`/`reviews` — eram 75/85, inalcançáveis).
 
 ### Alertas
 
-Alerta no Telegram quando `final_score ≥ ALERT_THRESHOLD` (default 85). O mesmo produto só
+Alerta no Telegram quando `final_score ≥ ALERT_THRESHOLD` (default 60). O mesmo produto só
 realerta depois de `ALERT_COOLDOWN_HOURS` (default 24) — ou antes, se a classificação subir de
 faixa (ex.: `SUBINDO` → `VIRALIZANDO`). Falha no envio não interrompe a análise; o alerta é
 tentado de novo no próximo ciclo.
+
+**Por que 60** (calibrado em 2026-10-03): enquanto `rank_momentum` e `reviews_velocity` valem
+0 (TIE-16), o numérico não passa de ~67,5 e o final de ~80,5 — o antigo 85 nunca disparava.
+Reprocessando com o motor atual as leituras reais do TikTok (24–25/09, 13 ciclos, 55 vídeos
+comerciais), o numérico teve p50 39, p90 52, p95 53 e só 4 vídeos passaram de 60. Nos 20
+insights com LLM (prompt v4), 60 deixa passar só o único `SUBINDO` (final 64,7): o LLM
+derruba os outros dois que tinham numérico acima de 60. Quando a TIE-16 ligar os dois
+componentes, o teto sobe — recalibre.
 
 ---
 
