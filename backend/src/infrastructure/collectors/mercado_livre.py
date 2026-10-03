@@ -238,7 +238,8 @@ class MercadoLivreCollector:
                     if item is None:
                         continue
                     yield dict(
-                        self._normalize_item(item), rank_position=posicoes[item_id]
+                        self._normalize_item(item),
+                        rank_position=posicoes[item_id],
                     )
                     total_collected += 1
 
