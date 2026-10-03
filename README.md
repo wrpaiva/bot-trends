@@ -280,7 +280,8 @@ final_score = SCORE_W_NUMERIC × score_numérico + SCORE_W_LLM × score_llm     
 ```
 
 Se o LLM falhar, não estiver configurado ou responder fora do formato, o `final_score` é só o
-numérico, e a classificação sai do numérico (≥ 75 `SUBINDO`, ≥ 85 `VIRALIZANDO`).
+numérico, e a classificação sai do numérico (≥ 60 `SUBINDO`, ≥ 66 `VIRALIZANDO`; cortes
+abaixo do teto de ~67,5 enquanto a TIE-16 não liga `rank`/`reviews` — eram 75/85, inalcançáveis).
 
 ### Alertas
 
