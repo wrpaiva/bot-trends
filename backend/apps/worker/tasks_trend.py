@@ -180,6 +180,8 @@ def _build_input(db, product_id: str, since: dt.datetime):
         views_per_hour=sinais.views_per_hour if sinais else None,
         engagement_per_hour=sinais.engagement_per_hour if sinais else None,
         has_shop_product=bool(product.get("has_shop_product")),
+        commercial_marker=marcador,
+        n_readings=len(metrics),
     )
     return ti, sources, sinais, marcador
 
@@ -273,6 +275,8 @@ def hybrid_trend_analyze(
                 ),
                 # Pesos usados neste insight, para comparar calibrações (TIE-22)
                 "score_weights": pesos,
+                # Versão do prompt do LLM (TIE-26); None quando caiu no fallback
+                "prompt_version": result.debug.get("prompt_version"),
             },
         )
 

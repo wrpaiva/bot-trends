@@ -21,11 +21,13 @@ from src.infrastructure.utils.datetime_utils import utcnow
 
 class _LLM:
     classificacao = "SUBINDO"
+    prompts: list[str] = []
 
     def __init__(self, *a, **kw):
         pass
 
     def analyze_trend(self, system, user):
+        _LLM.prompts.append(user)
         return LLMResult(
             trend_classification=_LLM.classificacao,
             potential_score_0_100=100.0,
@@ -60,6 +62,7 @@ def db(monkeypatch):
         )
 
     _LLM.classificacao = "SUBINDO"
+    _LLM.prompts = []
     _Telegram.enviados = []
     _Telegram.falhar = False
     monkeypatch.setattr(mod, "get_db", lambda: db)
@@ -328,3 +331,41 @@ def test_filtro_desligado_pela_config_pontua_tudo(db, monkeypatch):
 
     assert res["skipped_no_product"] == 0
     assert db["trend_insights"].count_documents({}) == 2
+
+
+# --- Prompt (TIE-26) -----------------------------------------------------------
+
+
+def test_insight_registra_a_versao_do_prompt(db):
+    from src.domain.llm_cache import PROMPT_VERSION
+
+    mod.hybrid_trend_analyze()
+
+    assert {i["prompt_version"] for i in db["trend_insights"].find()} == {PROMPT_VERSION}
+
+
+def test_sem_llm_o_insight_nao_tem_versao_de_prompt(db, monkeypatch):
+    def _sem_config(*a, **kw):
+        raise RuntimeError("LLM_API_KEY ausente")
+
+    monkeypatch.setattr(mod, "OpenAICompatibleLLMClient", _sem_config)
+    mod.hybrid_trend_analyze()
+
+    assert {i["prompt_version"] for i in db["trend_insights"].find()} == {None}
+
+
+def test_marcador_comercial_chega_ao_prompt(db):
+    _tiktok(db, "p1", "Achados da Shopee para a cozinha, link na bio")
+    _tiktok(db, "p2", "Organizador de gaveta, comenta QUERO")
+
+    mod.hybrid_trend_analyze()
+
+    assert all('"marcador_comercial": "' in p for p in _LLM.prompts)
+    assert len(_LLM.prompts) == 2
+
+
+def test_numero_de_leituras_chega_ao_prompt(db):
+    mod.hybrid_trend_analyze()
+
+    # A fixture grava uma métrica por produto
+    assert all('"leituras": 1' in p for p in _LLM.prompts)

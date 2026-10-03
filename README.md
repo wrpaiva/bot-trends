@@ -259,6 +259,13 @@ O LLM classifica em `ESTAVEL`, `SUBINDO`, `VIRALIZANDO`, `PICO_TEMPORARIO` ou `E
 score de potencial (0–100) e um risco (`BAIXO`, `MEDIO`, `ALTO`). A resposta é validada: valor
 fora do domínio é rejeitado, score fora da faixa é ajustado para 0–100.
 
+**Prompt (`backend/src/application/prompt_builder.py`).** O LLM recebe os sinais do produto
+(ritmo, aceleração, idade, nº de leituras, por que conta como produto) e a referência do grupo
+(mediana e p90 de cada sinal, mais o percentil do produto) — **nunca o score numérico pronto**:
+com ele no prompt, o modelo copiava a nota e o `llm_score` ficava a ±0,4 do numérico. Traz um
+exemplo few-shot por classificação e fala com quem decide se aposta no produto, não com quem
+postou o vídeo. Cada insight grava a versão do prompt em `prompt_version` (`null` no fallback).
+
 **Cache.** A análise do LLM é reaproveitada enquanto as métricas de entrada do produto não
 mudam, por até `LLM_CACHE_TTL_HOURS` (default 6; `0` desliga), no Redis. O score numérico é
 sempre recalculado. Estimativa: sem cache, até 2.400 chamadas/dia (50 produtos × 48 análises);

@@ -91,6 +91,8 @@ def test_mesmas_metricas_mesma_chave():
         {"title": "Fone 2"},
         {"social_velocity": 0.2},
         {"product_id": "p2"},
+        {"commercial_marker": "link_bio"},
+        {"n_readings": 2},
     ],
 )
 def test_metrica_diferente_chave_diferente(mudanca):

@@ -38,6 +38,12 @@ class TrendInput:
     engagement_per_hour: float | None = None
     has_shop_product: bool = False
 
+    # TIE-26: contexto para o LLM. O que fez o vídeo contar como produto
+    # (TIE-18) e quantas leituras sustentam os sinais: com uma só,
+    # social_velocity = 0 quer dizer "não medido", não "parado".
+    commercial_marker: str | None = None
+    n_readings: int | None = None
+
 
 @dataclass(frozen=True)
 class NumericScoreResult:

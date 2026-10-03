@@ -7,6 +7,8 @@ com a normalização por percentil (TIE-21) os componentes numéricos mudam
 quando *outros* produtos mudam, e isso zeraria a taxa de acerto sem trazer
 informação nova ao LLM. O score numérico é sempre recalculado; só a opinião do
 LLM é reaproveitada.
+Pela mesma razão a referência do grupo que vai no prompt (mediana/p90, TIE-26)
+fica fora da chave.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import json
 from .trend_models import TrendInput
 
 # Suba quando o prompt ou o schema de resposta mudar: invalida o cache inteiro
-PROMPT_VERSION = "v2"  # v2: ritmo por idade (motor de tendência)
+PROMPT_VERSION = "v4"  # v4: sem score pronto, few-shot, referência do grupo (TIE-26)
 
 # Casas decimais nos floats: ruído de ponto flutuante não pode virar miss
 _CASAS = 4
@@ -46,6 +48,8 @@ def llm_cache_key(ti: TrendInput) -> str:
         "views_per_hour": _r(ti.views_per_hour),
         "engagement_per_hour": _r(ti.engagement_per_hour),
         "has_shop_product": ti.has_shop_product,
+        "commercial_marker": ti.commercial_marker,
+        "n_readings": ti.n_readings,
     }
     bruto = json.dumps(entrada, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(bruto.encode()).hexdigest()
