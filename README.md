@@ -193,6 +193,7 @@ a memória de cada processo e a readiness mostra `degraded`.
 | `GET /health` | — | Liveness: o processo responde. Não depende de Mongo nem Redis |
 | `GET /health/ready` | — | Readiness: `ready`; `degraded` (200) com Redis fora ou migração pendente/falha; `unavailable` (503) com Mongo fora. Usado pelo healthcheck do Docker |
 | `GET /health/migrations` | ✅ | Status das últimas migrações: `ok`, `degraded` (alguma falhou) ou `running` |
+| `GET /metrics` | ✅ | Métricas no formato Prometheus: requisições e latência da API por rota, idade da última coleta/insight/backup, fallback do LLM, filas e circuitos (ver "Observabilidade") |
 | `GET /rankings/latest` | ✅ | Ranking por `final_score`, um item por produto (o insight mais recente). Query: `source` (`all`\|`mercadolivre`\|`tiktok`), `limit` (1–200), `hours` (1–720, recência: gerados nas últimas N horas), `window_hours` (opcional: só insights calculados com essa janela), `cursor`. Paginado por cursor |
 | `GET /insights/latest` | ✅ | Insights gerados nas últimas `hours` horas, do mais novo ao mais antigo. Query: `limit`, `hours`, `window_hours` (opcional), `cursor`. Paginado por cursor |
 | `GET /search` | ✅ | Busca no título (stemming em português, ignora acento), por relevância, com o último score de cada produto. Query: `q` (2–100 caracteres), `page`, `limit` (1–50) |
@@ -344,6 +345,40 @@ docker compose run --rm api python -c \
 
 Migrações (`backend/src/infrastructure/db/migrations/versions/`) são idempotentes, versionadas e
 protegidas por lock distribuído. Não há rollback: correção é sempre uma migração nova.
+
+---
+
+## 📈 Observabilidade (TIE-36)
+
+Três camadas, cada uma para uma pergunta:
+
+| Camada | Responde | Onde |
+|---|---|---|
+| Logs JSON | O que aconteceu nesta task/requisição? | `docker compose logs`; `task.inicio`/`task.fim`, `http.chamada` (TIE-13) |
+| Check de saúde | Tem algo quebrado agora? (ok/problema, com limiar) | Telegram `TELEGRAM_SYSTEM_CHAT_ID`, a cada 15 min (TIE-39) |
+| `GET /metrics` | Quanto, desde quando, com que tendência? | Formato Prometheus, exige `X-API-Key` |
+
+```bash
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/metrics
+```
+
+| Métrica | Tipo | O que é |
+|---|---|---|
+| `trends_http_requests_total{method,route,status}` | counter | Requisições à API. `route` é o template (`/products/{product_id}/curve`); sem rota vira `nao_roteada` |
+| `trends_http_request_duration_seconds{method,route}` | histogram | Latência da API |
+| `trends_last_collection_age_seconds{source}` | gauge | Desde a última leitura da fonte (ausente = nunca coletou) |
+| `trends_last_insight_age_seconds` | gauge | Desde o último insight |
+| `trends_insights_24h` | gauge | Insights nas últimas 24 h |
+| `trends_products{source}` | gauge | Produtos/vídeos conhecidos |
+| `trends_llm_fallback_ratio` / `_sample` | gauge | Fração dos insights das últimas 6 h sem LLM, e a amostra |
+| `trends_celery_queue_length{queue}` | gauge | Mensagens esperando por fila |
+| `trends_circuit_breaker_state{service,state}` / `_failures` | gauge | Estado atual (1) de cada circuito e falhas seguidas |
+| `trends_backup_age_seconds` / `_last_ok` / `_size_bytes` | gauge | Último backup registrado |
+| `trends_component_up{component}` | gauge | Mongo e Redis responderam no scrape (0 = a parte dele some, o resto sai) |
+
+Os contadores HTTP vivem na memória do processo: zeram a cada restart da API e só valem com um
+worker uvicorn (o padrão). Não há Prometheus/Grafana no compose — o endpoint é o contrato para
+quem for coletar.
 
 ---
 

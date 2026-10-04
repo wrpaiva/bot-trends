@@ -1,8 +1,9 @@
 # apps/api/main.py
 
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -15,6 +16,7 @@ from src.infrastructure.circuit_breaker import breakers_status
 from src.infrastructure.config import settings
 from src.infrastructure.db.mongo import close_client, get_db
 from src.infrastructure.logging_setup import configure_logging
+from src.infrastructure.observability import http_metrics
 from src.infrastructure.security.api_key import require_api_key
 from src.infrastructure.security.rate_limit import limiter
 
@@ -57,6 +59,24 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "X-API-Key"],
 )
+
+
+# =========================================
+# 📈 Métricas HTTP (TIE-36)
+# =========================================
+@app.middleware("http")
+async def metricas_http(request: Request, call_next):
+    inicio = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        # Template da rota, não a URL: cada produto não pode virar uma série.
+        # Sem rota (404, preflight) cai num rótulo só.
+        rota = getattr(request.scope.get("route"), "path", "nao_roteada")
+        http_metrics.observe(request.method, rota, status, time.perf_counter() - inicio)
 
 
 # =========================================

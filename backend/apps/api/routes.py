@@ -2,13 +2,18 @@
 
 import datetime as dt
 
+import redis
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from pymongo.errors import OperationFailure
 
 from apps.api.pagination import decode_cursor, encode_cursor
+from src.infrastructure.circuit_breaker import breakers_status
+from src.infrastructure.config import settings
 from src.infrastructure.db.mongo import get_db
+from src.infrastructure.observability import http_metrics, render, system_samples
 from src.infrastructure.security.rate_limit import limiter
 from src.infrastructure.utils.datetime_utils import ensure_utc, utcnow
 
@@ -40,6 +45,30 @@ def health_migrations():
         "running_count": len(running),
         "recent": migrations,
     }
+
+
+def _redis_metrics():
+    return redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+
+
+@router.get("/metrics")
+def metrics():
+    """
+    Métricas no formato Prometheus (TIE-36): HTTP da API + estado do sistema
+    medido agora. Componente fora vira `trends_component_up 0`, não erro.
+    """
+    try:
+        breakers = breakers_status()
+    except Exception:  # noqa: BLE001 — sem Redis, sem circuitos; o resto sai
+        breakers = {}
+    try:
+        db = get_db()
+    except Exception:  # noqa: BLE001 — config quebrada conta como Mongo fora
+        db = None
+    samples = http_metrics.samples() + system_samples(
+        db, _redis_metrics(), breakers=breakers, now=utcnow()
+    )
+    return PlainTextResponse(render(samples), media_type="text/plain; version=0.0.4")
 
 
 # =========================================================
