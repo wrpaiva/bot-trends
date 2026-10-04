@@ -394,3 +394,32 @@ def test_rank_momentum_vem_das_posicoes_do_ml(db):
         for i in db["trend_insights"].find()
     }
     assert nm_rank == {"ml1": pytest.approx(1.0), "p1": 0.0, "p2": 0.0}
+
+
+def test_reviews_velocity_e_vendas_vem_da_coleta_do_ml(db):
+    # TIE-16: 10 → 40 avaliações em 24 h = 30/dia. Com 3 produtos (< 5) o
+    # scoring usa a faixa absoluta 0–50/dia → 0,6; o TikTok continua 0.
+    # A última `sold_quantity` chega ao TrendInput (ia None para o LLM).
+    agora = utcnow()
+    db["products"].insert_one({"product_id": "ml1", "title": "Air fryer", "source": "mercadolivre"})
+    for horas, total, vendidos in ((30, 10, 100), (18, None, 110), (6, 40, 120)):
+        db["metrics"].insert_one(
+            {
+                "product_id": "ml1",
+                "ts": agora - dt.timedelta(hours=horas),
+                "source": "mercadolivre",
+                "reviews_total": total,
+                "sold_quantity": vendidos,
+                "price": 300.0,
+            }
+        )
+
+    mod.hybrid_trend_analyze(hours=72)
+
+    nm_reviews = {
+        i["product_id"]: i["debug"]["numeric_components"]["nm_reviews"]
+        for i in db["trend_insights"].find()
+    }
+    assert nm_reviews == {"ml1": pytest.approx(0.6), "p1": 0.0, "p2": 0.0}
+    prompt_ml = next(p for p in _LLM.prompts if "Air fryer" in p)
+    assert '"sold_quantity": 120' in prompt_ml
