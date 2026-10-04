@@ -76,6 +76,13 @@ docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE
   -v $PWD/backend:/app -w /app trends-dev pytest -p no:cacheprovider src/tests -q
 ```
 
+Backtest do score contra o baseline views/hora (TIE-23; só lê o banco, `--json` para o detalhe):
+```bash
+docker compose run --rm api python -m apps.backtest.main --horizon-hours 6
+```
+Com pool pequeno (≤ 2k vídeos por corte) a precisão no top-k acerta por acaso — o relatório
+avisa; olhe o Spearman. Mexeu no motor? Rode antes e depois.
+
 Rodar uma análise manual:
 ```bash
 docker compose run --rm api python -c \
