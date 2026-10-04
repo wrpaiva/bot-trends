@@ -16,19 +16,29 @@ def _collector(handler, categorias=("MLB1",)) -> MercadoLivreCollector:
         transport=httpx.MockTransport(handler),
         max_requests_per_minute=0,
     )
-    for fn in (c._get_highlights, c._get_items_batch):
+    for fn in (c._get_highlights, c._get_items_batch, c._get_reviews_total):
         fn.retry.sleep = lambda *_: None
     return c
 
 
 def _item(item_id: str) -> dict:
-    return {"code": 200, "body": {"id": item_id, "title": f"Produto {item_id}", "price": 10}}
+    return {
+        "code": 200,
+        "body": {
+            "id": item_id,
+            "title": f"Produto {item_id}",
+            "price": 10,
+            "sold_quantity": 7,
+        },
+    }
 
 
 def _handler_ok(request: httpx.Request) -> httpx.Response:
     if "/highlights/" in request.url.path:
         cat = request.url.path.rsplit("/", 1)[-1]
         return httpx.Response(200, json={"content": [{"id": f"{cat}-A", "type": "ITEM"}]})
+    if "/reviews/item/" in request.url.path:
+        return httpx.Response(200, json={"paging": {"total": 12}})
     ids = request.url.params["ids"].split(",")
     return httpx.Response(200, json=[_item(i) for i in ids])
 
@@ -37,7 +47,73 @@ def test_coleta_normaliza_itens_sem_erros():
     with _collector(_handler_ok) as c:
         itens = list(c.collect())
     assert [i["source_product_id"] for i in itens] == ["MLB1-A"]
+    assert itens[0]["reviews_total"] == 12
+    assert itens[0]["sold_quantity"] == 7
     assert c.errors == 0
+
+
+def test_falha_em_reviews_mantem_item_e_marca_coleta_parcial():
+    chamadas = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chamadas
+        if "/reviews/item/" in request.url.path:
+            chamadas += 1
+            return httpx.Response(500, json={"message": "indisponível"})
+        return _handler_ok(request)
+
+    with _collector(handler) as c:
+        itens = list(c.collect())
+
+    assert itens[0]["reviews_total"] is None
+    assert c.errors == 1
+    assert chamadas == 3
+
+
+def test_total_de_reviews_ausente_vira_none_sem_invalidar_item():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/reviews/item/" in request.url.path:
+            return httpx.Response(200, json={"paging": {}})
+        return _handler_ok(request)
+
+    with _collector(handler) as c:
+        itens = list(c.collect())
+
+    assert itens[0]["reviews_total"] is None
+    assert c.errors == 0
+
+
+def test_total_de_reviews_invalido_mantem_item_e_marca_erro():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/reviews/item/" in request.url.path:
+            return httpx.Response(200, json={"paging": {"total": "desconhecido"}})
+        return _handler_ok(request)
+
+    with _collector(handler) as c:
+        itens = list(c.collect())
+
+    assert itens[0]["reviews_total"] is None
+    assert c.errors == 1
+
+
+def test_falha_de_token_ao_buscar_reviews_interrompe_coleta_com_motivo():
+    class AuthFalhaNaTerceiraChamada(_AuthFalso):
+        def __init__(self):
+            super().__init__()
+            self.chamadas = 0
+
+        def access_token(self):
+            self.chamadas += 1
+            if self.chamadas == 3:
+                raise ml_mod.MLAuthError("token indisponível durante reviews")
+            return super().access_token()
+
+    auth = AuthFalhaNaTerceiraChamada()
+    with _com_auth(_handler_ok, auth) as c:
+        assert list(c.collect()) == []
+
+    assert c.errors == 1
+    assert c.auth_error == "token indisponível durante reviews"
 
 
 def test_categoria_com_401_nao_eh_retentada_e_nao_derruba_as_outras():
@@ -124,7 +200,7 @@ def test_toda_chamada_leva_o_bearer():
 
     with _com_auth(handler, _AuthFalso()) as c:
         assert len(list(c.collect())) == 1
-    assert headers == ["Bearer APP_USR-t1"] * 2
+    assert headers == ["Bearer APP_USR-t1"] * 3
 
 
 def test_401_renova_o_token_uma_vez_e_repete_a_chamada():
@@ -176,6 +252,8 @@ def test_item_leva_a_posicao_e_ordem_do_highlights_da_categoria():
     # TIE-14: /items pode devolver outra ordem; o ranking é relativo a cada
     # categoria e precisa preservar a ordem/posição de /highlights.
     def handler(request: httpx.Request) -> httpx.Response:
+        if "/reviews/item/" in request.url.path:
+            return httpx.Response(200, json={"paging": {"total": 2}})
         if "/highlights/" in request.url.path:
             conteudo = [
                 {"id": "B", "type": "ITEM", "position": 7},
