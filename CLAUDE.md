@@ -428,3 +428,42 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    produção). Subiu a cobertura? Suba o piso; nunca o baixe para passar.
 4. Descobriu uma armadilha nova ou corrigiu uma da lista acima? **Atualize este arquivo.**
 5. Não faça commit nem push sem eu pedir.
+
+---
+
+## Fluxo com o Notion
+
+O backlog (tarefas `TIE-*`) mora no Notion; este arquivo guarda o "como", o Obsidian o "porquê".
+**O ID do banco não entra aqui** — o repositório é público. Ele está na memória local do agente
+e no `00 - Index` do Obsidian. Sem as ferramentas do Notion carregadas na sessão (o conector
+aparece em `claude mcp list` mas as tools não vêm), abra uma sessão nova; não chute status.
+
+**Uma tarefa por vez**, na ordem:
+
+1. Notion: `Status` → **Em andamento**.
+2. Branch `fase-N/tie-XX` a partir de `main` (N = fase da tarefa no board). Implemente seguindo
+   "Fluxo de trabalho" acima; rode pytest, ruff e black no container de dev e deixe a saída
+   no transcript.
+3. Commit e PR. **Pedir uma tarefa por este fluxo autoriza branch, commit, push e PR** — merge
+   só com pedido explícito.
+4. Notion: `Status` → **Em revisão**, `QA` → **Pendente**, `Roteiro QA` preenchido (como
+   verificar no ambiente real, não "rodar os testes"). Critério de aceite atendido: marque o
+   `- [ ]` → `- [x]` existente.
+5. Depois do merge, confira que o Notion reflete o código. Ele já ficou para trás (a TIE-16
+   seguiu "Backlog" com o `rank_momentum` no `main`).
+
+**Nunca marque Concluído:** isso é depois do QA, feito pelo usuário. Tarefa entregue em parte
+(ex.: TIE-16, só `rank_momentum`) continua aberta, com os critérios feitos marcados.
+
+**Bloqueio.** Depende de algo externo (credencial, saldo, decisão do usuário) → `Status` →
+**Bloqueado**, motivo registrado, e pare essa tarefa. Erro técnico: até 3 tentativas com
+abordagens *diferentes*; bloqueio externo não queima tentativa. Não mexa em outras tarefas.
+
+**O workspace esgotou os blocos gratuitos.** Mudar propriedade (`update_properties`) e editar
+texto de bloco existente (`update_content`) funcionam; `insert_content` e criar página/tarefa
+falham. Comentário nunca foi testado: se falhar, registre o motivo editando um bloco existente
+da página e sempre na conversa. Tarefa nova não dá para criar — proponha na conversa.
+
+**Decida antes de disparar:** TIE-27 (autenticação do dashboard) precisa do modelo de auth
+escolhido e TIE-34 (deploy) do destino. Sem isso, a regra de bloqueio as para no primeiro passo.
+TIE-14, TIE-15 e o resto da TIE-16 dependem do token real do ML (armadilha 1).
