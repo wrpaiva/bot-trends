@@ -154,6 +154,31 @@ class MercadoLivreCollector:
 
         return results
 
+    @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
+    def _get_reviews_total(self, item_id: str) -> int | None:
+        """Busca o total de avaliações públicas de um anúncio."""
+        url = f"{self.base_url}/reviews/item/{item_id}"
+        data = self._get(url).json()
+        if not isinstance(data, dict):
+            raise ValueError("resposta de avaliações não é um objeto")
+        paging = data.get("paging")
+        if paging is None:
+            return None
+        if not isinstance(paging, dict):
+            raise ValueError("campo paging da resposta de avaliações não é um objeto")
+        total = paging.get("total")
+        if total is None:
+            return None
+        if isinstance(total, bool) or (isinstance(total, float) and not total.is_integer()):
+            raise ValueError("total de avaliações não é um inteiro")
+        try:
+            parsed = int(total)
+        except (TypeError, ValueError) as e:
+            raise ValueError("total de avaliações não é um inteiro") from e
+        if parsed < 0:
+            raise ValueError("total de avaliações é negativo")
+        return parsed
+
     def _normalize_item(self, item: dict[str, Any]) -> dict[str, Any]:
         """Normaliza um item do ML para o formato interno."""
         # Brand costuma vir em attributes; não é garantido
@@ -173,6 +198,7 @@ class MercadoLivreCollector:
             "category": item.get("category_id"),
             "brand": brand,
             "canonical_id": item.get("id"),
+            "sold_quantity": item.get("sold_quantity"),
             "marketplace": {
                 "sold_quantity": item.get("sold_quantity"),
                 "available_quantity": item.get("available_quantity"),
@@ -237,9 +263,23 @@ class MercadoLivreCollector:
                     item = items_by_id.get(item_id)
                     if item is None:
                         continue
+
+                    try:
+                        reviews_total = self._get_reviews_total(item_id)
+                    except MLAuthError as e:
+                        self._sem_token(e)
+                        return
+                    except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
+                        # A falha de avaliações não invalida os outros dados do
+                        # anúncio, mas precisa tornar a coleta parcialmente falha.
+                        logger.warning("Falha ao buscar avaliações do item %s: %s", item_id, e)
+                        self.errors += 1
+                        reviews_total = None
+
                     yield dict(
                         self._normalize_item(item),
                         rank_position=posicoes[item_id],
+                        reviews_total=reviews_total,
                     )
                     total_collected += 1
 

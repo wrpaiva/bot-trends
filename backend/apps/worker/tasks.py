@@ -98,6 +98,14 @@ def collect_ml():
             for item in collector.collect():
                 product_id = products.upsert(item)
 
+                reviews_total = item.get("reviews_total")
+                previous_reviews_total = metrics.previous_reviews_total(product_id)
+                reviews_delta = (
+                    reviews_total - previous_reviews_total
+                    if reviews_total is not None and previous_reviews_total is not None
+                    else None
+                )
+
                 metrics.insert(
                     {
                         "ts": now,
@@ -106,8 +114,10 @@ def collect_ml():
                         # Posição no /highlights da categoria (TIE-16)
                         "rank_position": item.get("rank_position"),
                         "price": item.get("price"),
-                        "reviews_total": None,
-                        "reviews_delta": 0,
+                        "sold_quantity": item.get("sold_quantity"),
+                        "reviews_total": reviews_total,
+                        # Sem leitura anterior, não há crescimento mensurável.
+                        "reviews_delta": reviews_delta,
                         "mentions": 0,
                         "engagement": 0,
                         "views": 0,
