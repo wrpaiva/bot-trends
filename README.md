@@ -222,7 +222,7 @@ não sobe). Cada insight grava os pesos usados em `score_weights`.
 | Componente | Peso | Normalização |
 |---|---|---|
 | `rank_momentum` | 0,20 | subida no `/highlights` do ML entre a leitura mais antiga e a mais recente da janela, em escala log (20º → 1º = 1; parado, caindo ou sem ranking — TikTok — = 0) |
-| `reviews_velocity` | 0,15 | percentil na categoria (ou 0–50 reviews) |
+| `reviews_velocity` | 0,15 | avaliações novas por dia (`/reviews/item` do ML, mais antiga × mais recente da janela); percentil na categoria (ou 0–50/dia). Sem avaliação — TikTok — = 0 |
 | aceleração (`social_velocity`) | 0,25 | quanto o ritmo entre as 2 últimas leituras supera o ritmo médio de vida; 0 com leitura única ou abaixo de 1.000 views |
 | views por hora de vida | 0,15 | percentil na categoria (ou escala log até 100 mil/h no modo absoluto) |
 | engajamento por hora de vida | 0,15 | percentil na categoria (ou escala log até 10 mil/h) |
@@ -250,9 +250,9 @@ celular. Categoria com menos de `SCORE_PERCENTILE_MIN_GROUP` (5) produtos usa o 
 ciclo; pool global menor que isso volta à normalização `absolute` (as faixas da tabela). Cada
 insight grava a base usada em `debug.numeric_components.normalization`.
 
-> `reviews_velocity` ainda é fixo em `0.0` (TIE-16). `rank_momentum` é calculado, mas só existe
-> para item do ML — que ainda não coleta (TIE-41) —, então hoje 35% do score numérico de um vídeo
-> do TikTok continua zero.
+> `rank_momentum` e `reviews_velocity` são calculados, mas só existem para item do ML — que ainda
+> não coleta (TIE-41) —, então hoje 35% do score numérico de um vídeo do TikTok continua zero
+> (`reviews_velocity` vira o percentil 0,5 do empate).
 
 ### LLM
 

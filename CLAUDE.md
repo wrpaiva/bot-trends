@@ -152,10 +152,13 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    do collector muda e a Fase 2 fica maior. O refresh token é de **uso único**: nunca renove
    fora de `MercadoLivreAuth` (ele grava o par novo com compare-and-set no Mongo, `ml_oauth`);
    um refresh "de teste" à mão invalida o token do worker.
-2. **`reviews_velocity` está hardcoded em `0.0`** em `tasks_trend.py` (TIE-16). O
-   `rank_momentum` é calculado (`src/domain/rank_momentum.py`, posição no `/highlights`), mas
-   só item do ML tem ranking — vídeo do TikTok fica em 0, e o ML ainda não coleta (TIE-41):
-   na prática, 35% do score numérico segue zero. **Ainda não validado com dados reais.** E boa parte do topo do ranking é
+2. **`rank_momentum` e `reviews_velocity` só existem para item do ML** (TIE-16). A coleta grava
+   `rank_position` (`/highlights`), `reviews_total` (`/reviews/item`, uma requisição a mais por
+   item) e `sold_quantity` (TIE-14/15); as regras ficam em `src/domain/rank_momentum.py` e
+   `reviews_velocity.py`. Vídeo do TikTok fica em 0 nos dois, e o ML ainda não coleta (TIE-41):
+   na prática, 35% do score numérico segue zero. **Nada disso foi validado com dados reais** —
+   nem se `/reviews/item` responde a token comum, nem se `/items` ainda devolve `sold_quantity`.
+   `reviews_delta` é None sem leitura anterior (era 0) e ninguém o lê: o score usa o total. E boa parte do topo do ranking é
    conteúdo sem produto (dança, meme de `#fyp`) — resolvido pelo filtro comercial (ver "Já
    corrigido"); o vínculo TikTok ↔ produto do ML continua pendente (TIE-18).
 3. **`MONGO_PASSWORD` só vale na primeira subida do volume.** `MONGO_INITDB_ROOT_PASSWORD` é
@@ -326,7 +329,7 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   2026-09-27, nos 501 produtos reais: no modo absoluto dezenas empatavam em exatamente 40,0 (as
   faixas de 300 mil views / 20 mil de engajamento são baixas para TikTok); com percentil só 4 do
   top 10 se mantêm. **A escala subiu** (média 16 → 45, máximo 52 → 72); o `ALERT_THRESHOLD`
-  foi recalibrado de 85 (inalcançável: teto ~80,5 com `rank`/`reviews` zerados) para 60 em
+  foi recalibrado de 85 (inalcançável: teto ~80,5 sem `rank`/`reviews`, como no TikTok) para 60 em
   2026-10-03, com replay das leituras reais — racional no README, "Alertas". No mesmo dia a
   classificação do fallback sem LLM foi de 75/85 para 60/66 (`fallback_classification` em
   `scoring.py`). **Quando o ML coletar, item com subida no ranking passa do teto: recalibre os dois.** Enquanto o ML não coleta, todo
