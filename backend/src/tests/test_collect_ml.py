@@ -149,6 +149,59 @@ def test_falha_de_token_vira_erro_com_motivo(db):
     assert res["reason"] == "nenhum token do Mercado Livre gravado"
 
 
+def test_grava_reviews_e_vendas_e_delta_apenas_com_leitura_anterior(db):
+    _FakeCollector.itens = [
+        dict(_item(1), reviews_total=10, sold_quantity=25),
+    ]
+    _FakeCollector.erros = 0
+
+    tasks_mod.collect_ml()
+    primeira = db["metrics"].find_one({}, {"_id": 0})
+
+    assert primeira["reviews_total"] == 10
+    assert primeira["sold_quantity"] == 25
+    assert primeira["reviews_delta"] is None
+
+    _FakeCollector.itens = [
+        dict(_item(1), reviews_total=14, sold_quantity=30),
+    ]
+    tasks_mod.collect_ml()
+    metricas = list(db["metrics"].find({}, {"_id": 0}).sort("ts", 1))
+
+    assert metricas[-1]["reviews_total"] == 14
+    assert metricas[-1]["sold_quantity"] == 30
+    assert metricas[-1]["reviews_delta"] == 4
+
+
+def test_delta_eh_none_quando_a_leitura_imediatamente_anterior_nao_tem_reviews(db):
+    _FakeCollector.itens = [dict(_item(1), reviews_total=10)]
+    _FakeCollector.erros = 0
+    tasks_mod.collect_ml()
+
+    _FakeCollector.itens = [dict(_item(1), reviews_total=None)]
+    tasks_mod.collect_ml()
+
+    _FakeCollector.itens = [dict(_item(1), reviews_total=15)]
+    tasks_mod.collect_ml()
+
+    ultima = list(db["metrics"].find({}, {"_id": 0}).sort("ts", 1))[-1]
+    assert ultima["reviews_total"] == 15
+    assert ultima["reviews_delta"] is None
+
+
+def test_delta_desempata_leituras_com_o_mesmo_timestamp(db, monkeypatch):
+    instante = tasks_mod.utcnow()
+    monkeypatch.setattr(tasks_mod, "utcnow", lambda: instante)
+
+    for total in (10, 13, 18):
+        _FakeCollector.itens = [dict(_item(1), reviews_total=total)]
+        _FakeCollector.erros = 0
+        tasks_mod.collect_ml()
+
+    ultima = db["metrics"].find_one(sort=[("_id", -1)])
+    assert ultima["reviews_delta"] == 5
+
+
 def test_grava_a_posicao_no_ranking(db):
     # TIE-16: antes era sempre None
     _FakeCollector.itens = [dict(_item(1), rank_position=4), _item(2)]

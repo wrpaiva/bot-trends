@@ -105,5 +105,16 @@ class MetricsRepo:
         self.col.create_index([("ts", -1)], name="ix_metrics_ts")
         self.col.create_index([("source", 1), ("ts", -1)], name="ix_metrics_source_ts")
 
+    def previous_reviews_total(self, product_id: str) -> int | None:
+        """Total de avaliações da leitura imediatamente anterior."""
+        metric = self.col.find_one(
+            {"product_id": product_id},
+            # Duas leituras podem compartilhar o mesmo `ts` (o worker calcula
+            # um instante por coleta). `_id` desempata pela ordem de inserção.
+            sort=[("ts", -1), ("_id", -1)],
+            projection={"_id": 0, "reviews_total": 1},
+        )
+        return metric.get("reviews_total") if metric else None
+
     def insert(self, metric: dict[str, Any]) -> None:
         self.col.insert_one(metric)
