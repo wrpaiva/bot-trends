@@ -229,10 +229,17 @@ class MercadoLivreCollector:
                     self.errors += 1
                     continue
 
-                for item in items:
-                    # /items não garante a ordem: a posição vem do highlights
+                # A resposta de /items pode chegar em uma ordem diferente da de
+                # /highlights. Reconstituir a ordem do highlights garante que a
+                # posição persistida é sempre a do ranking desta categoria.
+                items_by_id = {item.get("id"): item for item in items}
+                for item_id in batch_ids:
+                    item = items_by_id.get(item_id)
+                    if item is None:
+                        continue
                     yield dict(
-                        self._normalize_item(item), rank_position=posicoes.get(item.get("id"))
+                        self._normalize_item(item),
+                        rank_position=posicoes[item_id],
                     )
                     total_collected += 1
 

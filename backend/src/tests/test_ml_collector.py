@@ -172,9 +172,9 @@ def test_sem_token_a_coleta_para_e_diz_o_motivo():
     assert "nenhum token" in c.auth_error
 
 
-def test_item_leva_a_posicao_do_highlights():
-    # TIE-16: a posição no ranking de mais vendidos alimenta o rank_momentum.
-    # Usa `position` quando o ML manda; senão, a ordem da lista.
+def test_item_leva_a_posicao_e_ordem_do_highlights_da_categoria():
+    # TIE-14: /items pode devolver outra ordem; o ranking é relativo a cada
+    # categoria e precisa preservar a ordem/posição de /highlights.
     def handler(request: httpx.Request) -> httpx.Response:
         if "/highlights/" in request.url.path:
             conteudo = [
@@ -183,10 +183,13 @@ def test_item_leva_a_posicao_do_highlights():
                 {"id": "C", "type": "ITEM"},
             ]
             return httpx.Response(200, json={"content": conteudo})
-        # /items devolve fora de ordem: a posição não pode vir da ordem do batch
         ids = request.url.params["ids"].split(",")
         return httpx.Response(200, json=[_item(i) for i in reversed(ids)])
 
     with _collector(handler) as c:
-        itens = {i["source_product_id"]: i["rank_position"] for i in c.collect()}
-    assert itens == {"B": 7, "C": 3}
+        itens = list(c.collect())
+
+    assert [(i["source_product_id"], i["rank_position"]) for i in itens] == [
+        ("B", 7),
+        ("C", 3),
+    ]
