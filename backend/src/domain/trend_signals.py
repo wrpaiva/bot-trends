@@ -25,6 +25,19 @@ MIN_INTERVAL_HOURS = 1.0
 
 
 @dataclass(frozen=True)
+class Medida:
+    """
+    Valor de um sinal + por que ele é 0 sem ter sido medido (TIE-16).
+
+    `motivo` None = medido (inclusive um 0 real, como produto parado no
+    ranking). Preenchido = faltou histórico, e o 0 é "não sei", não "parado".
+    """
+
+    valor: float
+    motivo: str | None = None
+
+
+@dataclass(frozen=True)
 class Reading:
     ts: dt.datetime
     views: int

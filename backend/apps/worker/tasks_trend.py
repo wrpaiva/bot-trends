@@ -11,8 +11,8 @@ from src.domain.alerting import decide_alert
 from src.domain.commercial import commercial_marker
 from src.domain.interfaces import LLMClient
 from src.domain.percentile import PercentileContext
-from src.domain.rank_momentum import RankReading, rank_momentum
-from src.domain.reviews_velocity import ReviewsReading, reviews_velocity
+from src.domain.rank_momentum import RankReading, rank_momentum_medido
+from src.domain.reviews_velocity import ReviewsReading, reviews_velocity_medido
 from src.domain.scoring import NumericScoreStrategy
 from src.domain.trend_models import LLMResult, TrendInput
 from src.domain.trend_signals import Reading, compute_signals, is_too_old
@@ -169,6 +169,28 @@ def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | N
         if is_too_old(sinais.age_hours, max_age_days=settings.TREND_MAX_AGE_DAYS):
             return VELHO
 
+    # Sinais de marketplace (TIE-16). Sem histórico suficiente valem 0.0 —
+    # "não medido", não "parado" — e o log diz por quê. Só item do ML: vídeo do
+    # TikTok nunca tem ranking nem avaliação, e logar isso a cada ciclo é ruído.
+    rank = rank_momentum_medido(
+        [RankReading(ts=ensure_utc(m["ts"]), position=m.get("rank_position")) for m in metrics]
+    )
+    reviews = reviews_velocity_medido(
+        [ReviewsReading(ts=ensure_utc(m["ts"]), total=m.get("reviews_total")) for m in metrics]
+    )
+    if product.get("source") == "mercadolivre":
+        for componente, medida in (("rank_momentum", rank), ("reviews_velocity", reviews)):
+            if medida.motivo:
+                logger.info(
+                    "score.sem_historico",
+                    extra={
+                        "product_id": product_id,
+                        "componente": componente,
+                        "motivo": medida.motivo,
+                        "leituras": len(metrics),
+                    },
+                )
+
     ti = TrendInput(
         product_id=product_id,
         title=product.get("title"),
@@ -181,15 +203,8 @@ def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | N
         views_24h=int(last.get("views", 0) or 0),
         engagement_24h=int(last.get("engagement", 0) or 0),
         mentions_24h=int(last.get("mentions", 0) or 0),
-        # Subida no ranking de mais vendidos do ML (TIE-16); TikTok não tem
-        # posição e fica em 0
-        rank_momentum=rank_momentum(
-            [RankReading(ts=ensure_utc(m["ts"]), position=m.get("rank_position")) for m in metrics]
-        ),
-        # Avaliações novas por dia (ML, TIE-16); TikTok não tem avaliação e fica em 0
-        reviews_velocity=reviews_velocity(
-            [ReviewsReading(ts=ensure_utc(m["ts"]), total=m.get("reviews_total")) for m in metrics]
-        ),
+        rank_momentum=rank.valor,
+        reviews_velocity=reviews.valor,
         social_velocity=sinais.social_velocity if sinais else _calc_social_velocity(metrics),
         price_volatility=_calc_price_volatility(metrics),
         previous_final_score=None,

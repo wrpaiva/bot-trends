@@ -8,7 +8,8 @@ import datetime as dt
 
 import pytest
 
-from src.domain.reviews_velocity import ReviewsReading, reviews_velocity
+from src.domain.reviews_velocity import ReviewsReading, reviews_velocity, reviews_velocity_medido
+from src.domain.trend_signals import Medida
 
 T0 = dt.datetime(2026, 10, 4, tzinfo=dt.UTC)
 
@@ -51,3 +52,26 @@ def test_sem_crescimento_mensuravel_vale_0(leituras):
 
 def test_leituras_proximas_demais_nao_contam():
     assert reviews_velocity(_leituras(10, 40, passo_h=0)) == 0.0
+
+
+# --- Motivo do zero (TIE-16) --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "leituras, motivo",
+    [
+        ([], "sem_avaliacoes"),
+        (_leituras(None, None), "sem_avaliacoes"),
+        (_leituras(10), "leitura_unica"),
+        (_leituras(10, 40, passo_h=0), "intervalo_curto"),
+    ],
+)
+def test_sem_historico_diz_o_motivo(leituras, motivo):
+    m = reviews_velocity_medido(leituras)
+    assert m.valor == 0.0
+    assert m.motivo == motivo
+
+
+def test_total_que_cai_e_medida_real_sem_motivo():
+    assert reviews_velocity_medido(_leituras(40, 30)) == Medida(0.0, None)
+    assert reviews_velocity_medido(_leituras(10, 40)).motivo is None
