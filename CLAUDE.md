@@ -95,7 +95,7 @@ docker compose run --rm api python -c \
 
 | Arquivo | Consumido por | Contém |
 |---|---|---|
-| `.env` (raiz) | `docker-compose.yml` (interpolação) | `MONGO_USER/PASSWORD`, `REDIS_PASSWORD`, `API_KEY`, `CORS_ORIGINS`, `VITE_API_BASE` |
+| `.env` (raiz) | `docker-compose.yml` (interpolação) | `MONGO_USER/PASSWORD`, `REDIS_PASSWORD`, `API_KEY`, `CORS_ORIGINS` |
 | `backend/.env` | `env_file:` dos serviços api/worker/beat | credenciais de app: `LLM_*`, `APIFY_TOKEN`, `TELEGRAM_*`, `ML_*` |
 
 O compose **sobrescreve** `MONGO_URI`, `REDIS_URL`, `API_KEY` e `CORS_ORIGINS` do `backend/.env`
@@ -177,6 +177,8 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    Para valer: `docker compose down && docker volume rm trends_mongo_data`.
 4. **`http://localhost:80` não é uma origem válida.** Na porta 80 o browser envia
    `http://localhost`, sem a porta. Com `:80` explícito em `CORS_ORIGINS` o preflight falha.
+   Desde a TIE-27 o dashboard usa a mesma origem e o default é vazio: isso só morde quem
+   liberar outra origem para chamar a API direto.
 5. **O LLM se ancora em qualquer número pronto que estiver no prompt.** Até 2026-09-27 todo
    insight caiu no fallback (`429` = cota esgotada na OpenAI). Em 2026-10-01, com chave nova, os
    primeiros 20 insights com LLM (prompt v2) tinham `llm_score` a ±0,4 do numérico em todos: o
@@ -225,10 +227,15 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   `.versions.*` de um diretório que não existia. Derrubava API, worker e migrations no mesmo
   `ModuleNotFoundError`. Coberto agora por `src/tests/test_imports_smoke.py` — não apague
   esse teste, ele é a única coisa que impede a regressão de voltar calada (TIE-40).
-- **Frontend não enviava `X-API-Key`.** `api.js` agora manda o header a partir de
-  `import.meta.env.VITE_API_KEY`; o compose injeta `${API_KEY}` como `VITE_API_KEY` no build
-  do `web`. Fonte única de propósito: duas variáveis que precisam ser iguais divergem, e o
-  sintoma é 401 (TIE-1).
+- **Frontend não enviava `X-API-Key`** (TIE-1), e depois **mandava a chave no bundle** (TIE-27).
+  Agora o browser chama `/api` na mesma origem e quem põe a `X-API-Key` é o servidor: o nginx do
+  `web` (`frontend/nginx/default.conf.template`, `envsubst` na subida com
+  `NGINX_ENVSUBST_FILTER=^API_KEY$` para não tocar `$host`/`$uri`) e, em dev, o proxy do Vite.
+  **Nunca volte a usar `VITE_API_KEY`** — todo `VITE_*` é inlinado no bundle; o CI builda com
+  uma chave-canário e falha se ela aparecer no `dist`. `CORS_ORIGINS` passou a ser vazio por
+  padrão. **Isso esconde a chave, não autentica:** quem alcança o dashboard usa a API pelo
+  proxy, e o rate limit por IP vê só o IP do nginx. Expor na internet exige controle de acesso
+  no proxy com TLS (TIE-34).
 - **`LLM_MODEL` vs `LLM_MODEL_NAME`.** `openai_compatible.py` lê de `settings` (não mais de
   `os.environ`), o default mora só em `config.py`, e o modelo efetivo vai para o log no
   startup do cliente (TIE-2).

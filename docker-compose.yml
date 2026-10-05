@@ -95,7 +95,9 @@ services:
       MONGO_DB: ${MONGO_DB:-trends}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
       API_KEY: ${API_KEY:?defina API_KEY no .env da raiz}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost}
+      # O dashboard fala com a API pela mesma origem (proxy /api, TIE-27) e não
+      # precisa de CORS. Só liste aqui outra origem de browser que chame a API direto.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
     ports:
       - "${API_HOST_PORT:-8000}:8000"
     networks:
@@ -206,13 +208,12 @@ services:
     build:
       context: ./frontend
       target: production
-      args:
-        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
-        # Mesma fonte que a API valida. Duas variáveis que precisam ser iguais
-        # saem de sincronia mais cedo ou mais tarde — e o sintoma seria 401.
-        VITE_API_KEY: ${API_KEY:?defina API_KEY no .env da raiz}
     container_name: trends_web
     restart: unless-stopped
+    # O nginx repassa /api para a API e põe a X-API-Key (TIE-27). A chave fica
+    # no ambiente do container, em runtime — não no bundle nem no build.
+    environment:
+      API_KEY: ${API_KEY:?defina API_KEY no .env da raiz}
     ports:
       - "${WEB_HOST_PORT:-80}:80"
     networks:
@@ -242,9 +243,10 @@ services:
     container_name: trends_web_dev
     profiles:
       - dev
+    # Proxy do Vite faz o papel do nginx: /api → api:8000 com a X-API-Key (TIE-27)
     environment:
-      VITE_API_BASE: http://localhost:8000
-      VITE_API_KEY: ${API_KEY:?defina API_KEY no .env da raiz}
+      API_KEY: ${API_KEY:?defina API_KEY no .env da raiz}
+      API_PROXY_TARGET: http://api:8000
     ports:
       - "${WEB_DEV_HOST_PORT:-5173}:5173"
     volumes:

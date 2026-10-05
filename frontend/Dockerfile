@@ -1,8 +1,5 @@
-# check=skip=SecretsUsedInArgOrEnv
-# O check acima é suprimido de propósito: VITE_API_KEY *precisa* entrar no build,
-# porque o Vite inlina a variável no bundle. A chave já é pública para qualquer
-# visitante do dashboard; escondê-la do Dockerfile não esconderia de ninguém.
-# A solução correta (auth de verdade) está na TIE-27.
+# A chave da API NÃO entra no build (TIE-27): o bundle chama /api na mesma
+# origem e o nginx põe a X-API-Key em runtime (nginx/default.conf.template).
 
 # ===========================================
 # 🏗️ Stage 1: Build
@@ -21,12 +18,7 @@ RUN npm ci --silent || npm install --silent
 COPY . .
 
 # Build de produção
-ARG VITE_API_BASE=http://localhost:8000
-ENV VITE_API_BASE=$VITE_API_BASE
-
-# Passada inline no RUN em vez de ENV, para não persistir na camada do builder.
-ARG VITE_API_KEY
-RUN VITE_API_KEY="$VITE_API_KEY" npm run build
+RUN npm run build
 
 # ===========================================
 # 🚀 Stage 2: Production (nginx)
@@ -36,38 +28,9 @@ FROM nginx:alpine AS production
 # Configuração nginx otimizada para SPA
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Configuração customizada do nginx
-RUN echo 'server { \
-    listen 80; \
-    listen [::]:80; \
-    server_name _; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    \
-    # Gzip \
-    gzip on; \
-    gzip_vary on; \
-    gzip_min_length 1024; \
-    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml; \
-    \
-    # Cache para assets estáticos \
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ { \
-        expires 1y; \
-        add_header Cache-Control "public, immutable"; \
-    } \
-    \
-    # SPA fallback \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-    } \
-    \
-    # Health check \
-    location /health { \
-        access_log off; \
-        return 200 "ok"; \
-        add_header Content-Type text/plain; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+# Proxy /api → api:8000 com a X-API-Key do ambiente (envsubst na subida)
+COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
+ENV NGINX_ENVSUBST_FILTER=^API_KEY$
 
 EXPOSE 80
 
