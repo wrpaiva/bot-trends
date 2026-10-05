@@ -162,7 +162,17 @@ docker compose ps
 
 No `docker compose ps`: a `api` fica `healthy` quando `/health/ready` não dá 503; o `worker`
 responde a `celery inspect ping`; o `beat` não tem healthcheck (não serve HTTP nem ping).
-Docker Compose **não reinicia** container `unhealthy` sozinho — só o que termina.
+
+O Docker Compose **não reinicia** container `unhealthy` — só o que termina. Por isso o
+healthcheck da `api` (`apps/healthcheck/main.py`, TIE-38) distingue os dois casos:
+
+| Falha | O que acontece |
+|---|---|
+| Readiness (`/health/ready` 503 — Mongo fora) | Só `unhealthy`. Reiniciar a API não conserta o Mongo; em loop, pioraria |
+| Liveness (`/health` sem resposta) 3× seguidas (~90 s) | O healthcheck encerra a API (TERM, depois KILL); o container termina e o `restart: unless-stopped` o sobe de novo |
+
+Para isso a `api` roda com `init: true`: dentro do container o PID 1 ignora SIGKILL vindo de
+dentro, então a API tem de ser filha do init (tini). Nada recebe acesso ao `docker.sock`.
 
 ---
 
