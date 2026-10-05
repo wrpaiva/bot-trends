@@ -477,8 +477,13 @@ abordagens *diferentes*; bloqueio externo não queima tentativa. Não mexa em ou
 
 **O workspace esgotou os blocos gratuitos.** Mudar propriedade (`update_properties`) e editar
 texto de bloco existente (`update_content`) funcionam; `insert_content` e criar página/tarefa
-falham. Comentário nunca foi testado: se falhar, registre o motivo editando um bloco existente
-da página e sempre na conversa. Tarefa nova não dá para criar — proponha na conversa.
+falham. **Comentário funciona** (confirmado em 2026-10-04) — é onde vão o motivo do bloqueio e o
+PR entregue. Tarefa nova não dá para criar — proponha na conversa.
+
+**Cite o ID no título do PR e no commit (`TIE-XX: ...`).** Uma automação de reconciliação busca
+o PR de cada tarefa pelo ID e, sem achar, muda o status para **Bloqueado**. Foi o que aconteceu
+com TIE-13, TIE-22 e TIE-25: entregues no PR #4, que agrupou várias tarefas sem citar ID.
+PR com mais de uma tarefa cita todas.
 
 **Decida antes de disparar:** TIE-27 (autenticação do dashboard) precisa do modelo de auth
 escolhido e TIE-34 (deploy) do destino. Sem isso, a regra de bloqueio as para no primeiro passo.
