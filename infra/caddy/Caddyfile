@@ -1,0 +1,46 @@
+# Proxy reverso de produção (TIE-34): TLS automático + basic auth na frente do
+# dashboard. Os valores vêm do .env da raiz via docker-compose.prod.yml.
+#
+# - DOMAIN: com um domínio público, o Caddy emite e RENOVA sozinho o
+#   certificado do Let's Encrypt (precisa das portas 80 e 443 abertas e do DNS
+#   apontando para a VPS). Com DOMAIN=localhost usa a CA interna dele — é assim
+#   que o setup é testado sem VPS.
+# - BASIC_AUTH_HASH: hash bcrypt, gerado com `caddy hash-password` (ver
+#   docs/DEPLOY.md). Basic auth só é aceitável porque tudo aqui é HTTPS.
+#
+# É o controle de acesso que faltava na TIE-27: o nginx do `web` injeta a
+# X-API-Key no /api, então sem isto quem achasse o domínio usaria a API.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Liveness do nginx fica aberta para monitor externo de uptime; não
+	# toca a API nem devolve dado nenhum (é um "ok" estático).
+	handle /health {
+		reverse_proxy web:80
+	}
+
+	# Todo o resto — dashboard e /api — exige login
+	handle {
+		basic_auth {
+			{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+		}
+		reverse_proxy web:80
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

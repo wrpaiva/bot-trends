@@ -166,6 +166,14 @@ Docker Compose **não reinicia** container `unhealthy` sozinho — só o que ter
 
 ---
 
+### 5️⃣ Produção
+
+Em VPS, com HTTPS (renovação automática) e login na frente do dashboard e do `/api`:
+**[docs/DEPLOY.md](docs/DEPLOY.md)** — `docker-compose.prod.yml` (só o Caddy publicado no host)
++ `infra/caddy/Caddyfile`.
+
+---
+
 ## 🎛️ API
 
 Swagger em `http://localhost:8000/docs`.

@@ -1,0 +1,70 @@
+# =========================================
+# 🚀 Produção (TIE-34) — override do docker-compose.yml
+# =========================================
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# O que muda em relação ao compose base:
+# - Nada além do Caddy é publicado no host. Mongo, Redis, API e o nginx do
+#   dashboard só existem nas redes internas (`!reset` apaga as portas herdadas).
+# - Caddy na frente de tudo: TLS automático (Let's Encrypt, com renovação) e
+#   basic auth. Dashboard e /api só com login (ver infra/caddy/Caddyfile).
+# - CORS_ORIGINS vazio à força: o dashboard é mesma origem (TIE-27).
+# - Prometheus/Grafana (profile observability) seguem só em 127.0.0.1: acesso
+#   por túnel SSH (docs/DEPLOY.md).
+# Procedimento completo: docs/DEPLOY.md.
+
+services:
+  mongo:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  api:
+    ports: !reset []
+    environment:
+      CORS_ORIGINS: ""
+
+  web:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.10.0
+    container_name: trends_caddy
+    restart: unless-stopped
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+      - "${CADDY_HTTPS_PORT:-443}:443/udp"   # HTTP/3
+    environment:
+      DOMAIN: "${DOMAIN:?defina DOMAIN no .env da raiz, por exemplo trends.exemplo.com}"
+      ACME_EMAIL: "${ACME_EMAIL:?defina ACME_EMAIL no .env da raiz, recebe os avisos do Lets Encrypt}"
+      BASIC_AUTH_USER: "${BASIC_AUTH_USER:?defina BASIC_AUTH_USER no .env da raiz}"
+      # Hash bcrypt. No .env, entre ASPAS SIMPLES: sem elas o compose tenta
+      # expandir os "$" do hash e o login nunca bate (docs/DEPLOY.md).
+      BASIC_AUTH_HASH: "${BASIC_AUTH_HASH:?defina BASIC_AUTH_HASH no .env da raiz, gerado com caddy hash-password}"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificados e chave da conta ACME: perder isto = reemitir (limite do LE)
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - frontend
+    depends_on:
+      - web
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+    name: trends_caddy_data
+  caddy_config:
+    name: trends_caddy_config
