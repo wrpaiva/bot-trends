@@ -64,6 +64,13 @@ docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE
   "pytest -p no:cacheprovider src/tests -q && ruff check --no-cache . && black --check ."
 ```
 Sem o `--user`, o container grava `__pycache__` e `.ruff_cache` como root dentro de `backend/`.
+Montando só `backend/`, os testes que leem arquivos da raiz são **pulados** (`test_docs` e
+`test_healthchecks_do_compose`) — e o CI os roda. Antes de abrir PR que mexe em README, compose
+ou Dockerfile, monte o repositório inteiro, como o CI vê:
+```bash
+docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
+  -v $PWD:/repo -w /repo/backend trends-dev pytest -p no:cacheprovider src/tests -q
+```
 
 Testes que precisam de Mongo real (hoje só `test_search.py`: o mongomock não implementa `$text`)
 leem `MONGO_TEST_URI` e são **pulados** sem ela. O CI sobe um `mongo:7` e roda sempre. Local,
