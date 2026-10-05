@@ -300,3 +300,33 @@ def test_cursor_do_ranking_nao_serve_para_insights(client, db):
     db["trend_insights"].insert_many([_insight(f"p{i}", 50 + i) for i in range(3)])
     cursor = client.get("/rankings/latest", params={"limit": 1}).json()["next_cursor"]
     assert client.get("/insights/latest", params={"cursor": cursor}).status_code == 400
+
+
+# --- /metrics (TIE-36) --------------------------------------------------------
+
+
+@pytest.fixture
+def sem_redis(monkeypatch):
+    # Sem Redis nos testes: filas e circuitos vêm vazios
+    monkeypatch.setattr(routes, "_redis_metrics", lambda: None)
+    monkeypatch.setattr(routes, "breakers_status", lambda: {})
+
+
+def test_metrics_exige_api_key(client, sem_redis):
+    r = client.get("/metrics", headers={"X-API-Key": "errada"})
+    assert r.status_code == 401
+
+
+def test_metrics_em_formato_prometheus_com_rota_como_template(client, db, sem_redis):
+    db["trend_insights"].insert_one(_insight("p1", 50))
+    client.get("/products/abc/curve")
+
+    r = client.get("/metrics")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain; version=0.0.4")
+    # A rota vai como template: um produto não vira uma série nova
+    assert 'route="/products/{product_id}/curve"' in r.text
+    assert "/products/abc" not in r.text
+    assert "trends_insights_24h 1" in r.text
+    assert 'trends_component_up{component="redis"} 0' in r.text

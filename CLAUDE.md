@@ -420,6 +420,12 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   Sem `ML_CLIENT_ID`/`ML_CLIENT_SECRET` a task não mexe no circuit breaker (é config, não falha
   do serviço). `ML_CLIENT_SECRET` está na redação do log, e `APP_USR-...`/`TG-...` são mascarados
   por padrão — os tokens moram no Mongo, não no `settings` (TIE-41).
+- **Observabilidade sem números** (TIE-36). Os logs diziam o que aconteceu e o check de saúde se
+  havia problema, mas nada respondia "desde quando" ou "quanto". Agora `GET /metrics` (Prometheus,
+  com `X-API-Key`) expõe HTTP por rota e o estado do sistema medido no scrape
+  (`src/infrastructure/observability.py`, sem dependência nova). **Rótulo `route` é o template
+  da rota, nunca a URL** — um produto não pode virar série. Contadores HTTP são por processo:
+  com mais de um worker uvicorn, troque por `prometheus_client` multiprocesso.
 - **Índice de texto recusava vídeo em árabe.** O índice da v005 usava o `language_override`
   padrão do Mongo: o campo `language` do documento escolhe o stemming. A coleta passou a gravar
   `language` com o idioma do vídeo, e idioma não suportado (`ar`, `ms`, `un`...) fazia a escrita
