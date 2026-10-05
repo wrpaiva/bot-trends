@@ -177,5 +177,12 @@ def test_healthchecks_do_compose():
     worker = " ".join(servicos["worker"]["healthcheck"]["test"])
     assert "inspect ping" in worker
     assert servicos["beat"]["healthcheck"].get("disable") is True
+    # API: o HEALTHCHECK roda o script que separa readiness (só unhealthy) de
+    # liveness (encerra a API travada) — e isso só funciona com init (TIE-38)
     dockerfile = (RAIZ / "backend" / "Dockerfile").read_text()
-    assert "/health/ready" in dockerfile
+    assert "python -m apps.healthcheck.main" in dockerfile
+    assert (
+        servicos["api"].get("init") is True
+    ), "api sem init: o healthcheck não consegue encerrá-la"
+    # A readiness continua sendo a /health/ready (default do script)
+    assert "/health/ready" in (RAIZ / "backend" / "apps" / "healthcheck" / "main.py").read_text()
