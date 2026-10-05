@@ -9,16 +9,28 @@ function stubFetch(impl) {
 }
 
 describe("httpGet", () => {
-  it("API fora do ar vira mensagem com a URL e a dica de CORS", async () => {
+  it("API fora do ar vira mensagem que aponta o proxy /api", async () => {
     stubFetch(() => Promise.reject(new TypeError("Failed to fetch")));
     await expect(api.rankingsLatest({ hours: 72, limit: 20, source: "all" })).rejects.toThrow(
-      /Não foi possível falar com a API.*CORS_ORIGINS/s
+      /Não foi possível falar com a API.*\/api/s
     );
   });
 
-  it("401 explica a API_KEY", async () => {
+  it("401 aponta a API_KEY do proxy, não o build", async () => {
     stubFetch(() => Promise.resolve(new Response("", { status: 401 })));
-    await expect(api.rankingsLatest({ hours: 72, limit: 20, source: "all" })).rejects.toThrow(/X-API-Key/);
+    await expect(api.rankingsLatest({ hours: 72, limit: 20, source: "all" })).rejects.toThrow(
+      /API_KEY.*container web/s
+    );
+  });
+
+  // TIE-27: a chave fica no servidor (nginx / proxy do Vite), nunca no browser
+  it("chama /api na mesma origem e não manda X-API-Key", async () => {
+    stubFetch(() => Promise.resolve(new Response("{}", { status: 200 })));
+    await api.rankingsLatest({ hours: 24, limit: 10, source: "all" });
+    const [url, opts] = fetch.mock.calls[0];
+    expect(url).toMatch(/^\/api\/rankings\/latest\?/);
+    const headers = new Headers(opts?.headers);
+    expect(headers.has("X-API-Key")).toBe(false);
   });
 
   it("429 pede para esperar", async () => {

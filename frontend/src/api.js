@@ -1,20 +1,16 @@
-
-const API_BASE =
-  import.meta.env.VITE_API_BASE || "http://localhost:8000";
-
-// Todas as rotas do router exigem X-API-Key (require_api_key no include_router).
-// A chave é inlinada no bundle pelo Vite em tempo de build — ou seja, é pública
-// para quem abrir o DevTools. Aceitável enquanto o dashboard for de uso pessoal;
-// a autenticação de verdade está na TIE-27.
-const API_KEY = import.meta.env.VITE_API_KEY;
+// A API é chamada na MESMA origem, em /api (TIE-27). Quem fala com a API de
+// verdade é o servidor — o nginx do container `web` em produção, o proxy do
+// Vite em desenvolvimento — e é ele que põe a X-API-Key. A chave nunca chega
+// ao browser nem ao bundle; e, sendo a mesma origem, não há CORS no caminho.
+const API_BASE = "/api";
 
 // Mensagem que diz o que fazer, não só o status (TIE-28): o dashboard nunca
 // pode virar tela branca ou "HTTP 500" sem contexto.
 async function erroHttp(r, path) {
   if (r.status === 401) {
     return new Error(
-      `401 em ${path}: X-API-Key ausente ou incorreta. ` +
-        `Confira API_KEY no .env da raiz e refaça o build do frontend.`
+      `401 em ${path}: o proxy enviou uma X-API-Key que a API não aceitou. ` +
+        `Confira API_KEY no .env da raiz e recrie o container web (docker compose up -d web).`
     );
   }
   if (r.status === 429) {
@@ -31,19 +27,14 @@ async function erroHttp(r, path) {
 }
 
 async function httpGet(path) {
-  const headers = {};
-  if (API_KEY) {
-    headers["X-API-Key"] = API_KEY;
-  }
-
   let r;
   try {
-    r = await fetch(`${API_BASE}${path}`, { headers });
+    r = await fetch(`${API_BASE}${path}`);
   } catch {
-    // fetch só rejeita em falha de rede ou CORS bloqueado — o browser não diz qual
+    // Mesma origem: aqui só cai falha de rede até o próprio servidor do dashboard
     throw new Error(
-      `Não foi possível falar com a API em ${API_BASE}. Ela está no ar? ` +
-        `Se estiver, confira se a origem deste dashboard está em CORS_ORIGINS.`
+      `Não foi possível falar com a API em ${API_BASE}. O dashboard está no ar? ` +
+        `Se estiver, a API pode estar fora (o proxy devolve 502).`
     );
   }
   if (!r.ok) {

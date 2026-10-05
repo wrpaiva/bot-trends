@@ -3,18 +3,22 @@
 React 18 · Vite 5 · chart.js. Mostra o ranking (`/rankings/latest`) e, por produto, o último
 insight e a curva histórica. Visão geral e setup no [README da raiz](../README.md).
 
-## Configuração (em tempo de build)
+## Como fala com a API (TIE-27)
 
-| Variável | Origem | Uso |
+O dashboard chama `/api/...` **na mesma origem** e não manda chave nenhuma. Quem fala com a API
+é o servidor, que põe o header `X-API-Key`:
+
+| Modo | Proxy | De onde vem a chave |
 |---|---|---|
-| `VITE_API_BASE` | `.env` da raiz | URL da API vista pelo **browser** (default `http://localhost:8000`) |
-| `VITE_API_KEY` | `API_KEY` do `.env` da raiz, injetada pelo compose | Enviada no header `X-API-Key` |
+| Produção (`web`) | nginx, `nginx/default.conf.template` → `api:8000` | `API_KEY` no ambiente do container, aplicada na subida (`envsubst`) |
+| Desenvolvimento (`web-dev`) | proxy do Vite (`vite.config.js`) → `API_PROXY_TARGET` | `API_KEY` no ambiente do Node — sem prefixo `VITE_`, nunca vai para o bundle |
 
-Ambas são embutidas no bundle pelo Vite: mudou alguma, rode `docker compose build web` —
-recriar o container não basta. A origem do dashboard precisa estar em `CORS_ORIGINS`.
+A chave não está no bundle, na imagem nem no build: mudou a `API_KEY`, basta recriar o container
+(`docker compose up -d web`). Sem CORS no caminho, porque é a mesma origem. O CI faz o build com
+uma chave-canário no ambiente e falha se ela aparecer no `dist`.
 
-> A `API_KEY` fica visível no JavaScript servido ao browser. Serve para uso local/privado;
-> expor o dashboard na internet pede autenticação de verdade (TIE-27).
+> Isso esconde a chave, não autentica quem acessa: quem alcança o dashboard usa a API pelo
+> proxy. Antes de expor na internet, controle de acesso no proxy com TLS (TIE-34).
 
 ## Rodando
 
@@ -27,7 +31,7 @@ Sem Docker:
 
 ```bash
 npm ci
-VITE_API_BASE=http://localhost:8000 VITE_API_KEY=... npm run dev
+API_KEY=... API_PROXY_TARGET=http://localhost:8000 npm run dev   # proxy /api → API
 npm run build                             # o CI roda este
 ```
 

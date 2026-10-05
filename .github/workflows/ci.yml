@@ -102,7 +102,17 @@ jobs:
       # Lógica da tela (ordenação, estados, mensagens de erro) — TIE-28
       - run: npm test
 
-      - run: npm run build
+      # TIE-27: a chave da API não pode chegar ao bundle. Build com uma chave
+      # canário em todas as variáveis que já a carregaram; ela não pode aparecer.
+      - name: build sem chave no bundle
+        env:
+          API_KEY: canario-tie27-nao-pode-vazar
+          VITE_API_KEY: canario-tie27-nao-pode-vazar
+        run: |
+          npm run build
+          if grep -rq canario-tie27-nao-pode-vazar dist; then
+            echo "::error::API_KEY vazou para o bundle (dist)"; exit 1
+          fi
 
   docker-build:
     name: Docker · build ${{ matrix.servico }}

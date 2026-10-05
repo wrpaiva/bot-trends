@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     # API — obrigatória para a API subir (validada no lifespan)
     API_KEY: str | None = None
     # Origens separadas por vírgula; use `cors_origins` para a lista
-    CORS_ORIGINS: str = "http://localhost:5173"
+    # Vazio = nenhuma origem cross-origin: o dashboard usa o proxy /api (TIE-27)
+    CORS_ORIGINS: str = ""
 
     # Telegram
     TELEGRAM_BOT_TOKEN: str | None = None

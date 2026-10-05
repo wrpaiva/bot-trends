@@ -70,7 +70,7 @@ São **dois** arquivos, com papéis diferentes:
 
 | Arquivo | Lido por | Contém |
 |---|---|---|
-| `.env` (raiz) | `docker-compose.yml` | senhas do Mongo/Redis, `API_KEY`, `CORS_ORIGINS`, `VITE_API_BASE`, portas do host |
+| `.env` (raiz) | `docker-compose.yml` | senhas do Mongo/Redis, `API_KEY`, `CORS_ORIGINS`, portas do host |
 | `backend/.env` | serviços `api`, `worker`, `beat` | credenciais da aplicação: `LLM_*`, `APIFY_*`, `TIKTOK_*`, `TELEGRAM_*`, `ALERT_*`, `ML_*` |
 
 ```bash
@@ -86,9 +86,8 @@ Variáveis que você provavelmente vai querer mexer:
 
 | Variável | Arquivo | Para quê |
 |---|---|---|
-| `API_KEY` | raiz | Chave exigida no header `X-API-Key`; também é embutida no build do dashboard |
-| `CORS_ORIGINS` | raiz | Origens do dashboard, separadas por vírgula. Na porta 80 use `http://localhost`, **sem** `:80` |
-| `VITE_API_BASE` | raiz | URL da API vista pelo browser; é embutida no build — mudou, rode `docker compose build web` |
+| `API_KEY` | raiz | Chave exigida no header `X-API-Key`. O nginx do dashboard a injeta no proxy `/api` em runtime — **não** vai para o bundle (TIE-27) |
+| `CORS_ORIGINS` | raiz | Vazio por padrão: o dashboard usa a mesma origem. Só liste uma origem de browser que chame a API **direto** (na porta 80, `http://localhost`, **sem** `:80`) |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | backend | Qualquer gateway compatível com a API da OpenAI. Sem eles a análise usa só o score numérico |
 | `APIFY_TOKEN`, `TIKTOK_HASHTAGS` | backend | Coleta do TikTok. **Custa crédito**: ~US$ 0,0037 por vídeo |
 | `TIKTOK_RESULTS_PER_HASHTAG`, `TIKTOK_INTERVAL_MIN` | backend | Volume da coleta (default: 10 vídeos por hashtag a cada 120 min) |
@@ -184,6 +183,17 @@ curl -H "X-API-Key: $API_KEY" "http://localhost:8000/rankings/latest?hours=72&li
 Há rate limit global de 100 requisições/min por IP, e 30/min em `/rankings/latest` e `/search`
 (os probes `/health*` ficam de fora). O contador fica no Redis; com o Redis fora ele passa para
 a memória de cada processo e a readiness mostra `degraded`.
+
+**O dashboard não conhece a chave (TIE-27).** O browser chama `/api/...` na mesma origem do
+dashboard; o nginx do container `web` repassa para a API e põe a `X-API-Key`, lida do ambiente do
+container na subida (`frontend/nginx/default.conf.template`). Em desenvolvimento, o proxy do Vite
+faz o mesmo. O CI faz o build com uma chave-canário e falha se ela aparecer no `dist`.
+
+> **Isso esconde a chave; não autentica quem acessa.** Quem alcança o dashboard usa a API pelo
+> proxy — e todo acesso pelo proxy chega à API com o IP do nginx, então o rate limit por IP vira
+> um contador só para o dashboard. Para uso local basta. **Antes de expor na internet**, ponha
+> controle de acesso (basic auth, SSO, IP allowlist) no proxy com TLS da TIE-34 — basic auth sem
+> TLS manda a senha em claro.
 
 ### 📍 Endpoints
 
