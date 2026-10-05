@@ -208,7 +208,10 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    vale 0 com leitura única ("não medido", não "parado"); e com só um exemplo de `EM_QUEDA` (vídeo
    velho) o modelo marcou queda em vídeo de 5 h sem tração — daí o exemplo "novo sem tração =
    ESTAVEL". Não volte a pôr score pronto no prompt. Mexeu no prompt? Suba `PROMPT_VERSION`
-   (`src/domain/llm_cache.py`); o insight grava `prompt_version`. Revalide com dados reais.
+   (`src/domain/llm_cache.py`); o insight grava `prompt_version`. Revalide com dados reais:
+   `apps.prompt_eval` (README, "Avaliação do prompt") mede estabilidade por temperatura e a
+   concordância com rótulos humanos, por versão. Temperatura 0,2 escolhida com medição em
+   2026-10-05 (±1,3 no score, 98% de classificação estável; 0,7 dobra a variação).
 6. **A coleta do TikTok está parada desde ~2026-09-25: crédito da Apify esgotado.** O actor
    devolve `402 Payment Required` a cada ciclo. O worker com o código antigo retentava e
    devolvia `status: ok, inserted: 0` — ninguém viu por 2,7 dias (achado pelo check de saúde da
