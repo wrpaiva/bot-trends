@@ -300,6 +300,34 @@ insights com LLM (prompt v4), 60 deixa passar só o único `SUBINDO` (final 64,7
 derruba os outros dois que tinham numérico acima de 60. Item do ML com subida no ranking pode
 ir além do teto de ~67,5: quando o ML coletar (TIE-41), recalibre com os dados dele.
 
+### Backtest (TIE-23)
+
+O score ordena melhor o que vai crescer do que um baseline burro? Em cada instante de coleta T,
+`apps.backtest` monta as entradas **como a análise as veria em T** (só leituras até T, mesmo
+filtro comercial, corte de idade e percentil), pontua com o motor numérico atual e compara três
+ordens — `score`, `views_por_hora` (o baseline) e `views_total` (popularidade) — com o que
+aconteceu até a primeira leitura ≥ T + horizonte: views ganhas por hora (`ganho_views_h`) e esse
+ritmo ÷ o ritmo de vida (`aceleracao`). Métricas: Spearman e precisão no top-k, média dos cortes.
+Só lê o banco.
+
+```bash
+docker compose run --rm api python -m apps.backtest.main                       # horizonte 6 h
+docker compose run --rm api python -m apps.backtest.main --horizon-hours 3 --json
+```
+
+**Resultado em 2026-10-04 — inconclusivo.** As leituras reais cobrem só 24/09 02h → 25/09 06h e a
+maioria dos vídeos aparece em uma coleta só: com o pool de produção (50), 5–6 cortes de 5–7
+vídeos. Ampliando o pool (`--limit-products 500 --k 3`), Spearman médio contra `ganho_views_h`:
+
+| Horizonte | Cortes | `score` | `views_por_hora` | `views_total` |
+|---|---|---|---|---|
+| 3 h | 10 | +0,52 | +0,36 | +0,08 |
+| 6 h | 5 | +0,51 | +0,51 | +0,14 |
+
+O score empata ou fica levemente à frente do baseline, e os dois batem a popularidade pura — mas
+com 5–7 vídeos por corte e cortes que compartilham vídeos, nada disso é significativo. O LLM fica
+de fora (não dá para refazer as chamadas do passado). **Rode de novo quando a coleta voltar.**
+
 ---
 
 ## ⚙️ Agendamento

@@ -104,13 +104,16 @@ VELHO = object()
 SEM_PRODUTO = object()
 
 
-def _build_input(db, product_id: str, since: dt.datetime):
+def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | None = None):
     """
     (TrendInput, fontes, sinais | None, marcador comercial | None), `VELHO`,
     `SEM_PRODUTO`, ou None se faltar produto ou métricas. Com data de
     publicação, views e engajamento viram ritmo (por hora de vida) e
     `social_velocity` vira aceleração/frescor; sem ela, fica o cálculo antigo
     (produto do ML, vídeo coletado antes de gravarmos a data).
+
+    `until` corta as leituras posteriores — o backtest (TIE-23) monta a entrada
+    como a análise a veria naquele instante.
     """
     product = db["products"].find_one(
         {"product_id": product_id},
@@ -135,9 +138,10 @@ def _build_input(db, product_id: str, since: dt.datetime):
         if marcador is None and settings.TREND_REQUIRE_COMMERCIAL:
             return SEM_PRODUTO
 
+    janela = {"$gte": since} if until is None else {"$gte": since, "$lte": until}
     metrics = list(
         db["metrics"]
-        .find({"product_id": product_id, "ts": {"$gte": since}}, {"_id": 0})
+        .find({"product_id": product_id, "ts": janela}, {"_id": 0})
         .sort("ts", -1)
         .limit(24)
     )
@@ -198,6 +202,24 @@ def _build_input(db, product_id: str, since: dt.datetime):
     return ti, sources, sinais, marcador
 
 
+def _produtos_ativos(
+    db, since: dt.datetime, limit: int, until: dt.datetime | None = None
+) -> list[str]:
+    """Produtos com leitura na janela, os de leitura mais recente primeiro."""
+    janela = {"$gte": since} if until is None else {"$gte": since, "$lte": until}
+    return [
+        row["_id"]
+        for row in db["metrics"].aggregate(
+            [
+                {"$match": {"ts": janela}},
+                {"$group": {"_id": "$product_id", "last_ts": {"$max": "$ts"}}},
+                {"$sort": {"last_ts": -1}},
+                {"$limit": limit},
+            ]
+        )
+    ]
+
+
 @shared_task(name="tasks.hybrid_trend_analyze")
 def hybrid_trend_analyze(
     hours: int = 72, limit_products: int = 50, alert_threshold: float | None = None
@@ -213,17 +235,7 @@ def hybrid_trend_analyze(
     window_from = since
     window_to = utcnow()
 
-    # Produtos ativos
-    active = list(
-        db["metrics"].aggregate(
-            [
-                {"$match": {"ts": {"$gte": since}}},
-                {"$group": {"_id": "$product_id", "last_ts": {"$max": "$ts"}}},
-                {"$sort": {"last_ts": -1}},
-                {"$limit": limit_products},
-            ]
-        )
-    )
+    active = _produtos_ativos(db, since, limit_products)
 
     hybrid = settings.hybrid_weights()
     engine = HybridTrendEngine(
@@ -238,7 +250,7 @@ def hybrid_trend_analyze(
 
     # Fase 1: monta as entradas de todos os produtos do ciclo — o percentil
     # (TIE-21) precisa da população inteira antes de pontuar qualquer um.
-    brutas = [_build_input(db, row["_id"], since) for row in active]
+    brutas = [_build_input(db, pid, since) for pid in active]
     velhos = sum(1 for e in brutas if e is VELHO)
     sem_produto = sum(1 for e in brutas if e is SEM_PRODUTO)
     entradas = [e for e in brutas if e not in (None, VELHO, SEM_PRODUTO)]
