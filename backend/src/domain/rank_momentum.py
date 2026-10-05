@@ -19,7 +19,7 @@ import datetime as dt
 import math
 from dataclasses import dataclass
 
-from .trend_signals import MIN_INTERVAL_HOURS
+from .trend_signals import MIN_INTERVAL_HOURS, Medida
 
 # Itens pedidos por categoria no /highlights (`max_items_per_category` do collector)
 DEFAULT_MAX_POSITION = 20
@@ -31,25 +31,39 @@ class RankReading:
     position: int | None
 
 
+def rank_momentum_medido(
+    readings: list[RankReading],
+    *,
+    max_position: int = DEFAULT_MAX_POSITION,
+    min_interval_hours: float = MIN_INTERVAL_HOURS,
+) -> Medida:
+    """Momentum e, quando não deu para medir, o motivo (TIE-16)."""
+    if max_position < 2:
+        raise ValueError("max_position precisa ser >= 2: ranking de 1 posição não tem subida")
+
+    com_posicao = sorted((r for r in readings if r.position), key=lambda r: r.ts)
+    if not com_posicao:
+        return Medida(0.0, "sem_ranking")
+    if len(com_posicao) < 2:
+        return Medida(0.0, "leitura_unica")
+
+    antiga, recente = com_posicao[0], com_posicao[-1]
+    if (recente.ts - antiga.ts).total_seconds() / 3600 < min_interval_hours:
+        return Medida(0.0, "intervalo_curto")
+
+    antes = min(antiga.position, max_position)
+    agora = max(recente.position, 1)
+    if agora >= antes:
+        return Medida(0.0)  # medido: parado ou caindo
+    return Medida(min(math.log(antes / agora) / math.log(max_position), 1.0))
+
+
 def rank_momentum(
     readings: list[RankReading],
     *,
     max_position: int = DEFAULT_MAX_POSITION,
     min_interval_hours: float = MIN_INTERVAL_HOURS,
 ) -> float:
-    if max_position < 2:
-        raise ValueError("max_position precisa ser >= 2: ranking de 1 posição não tem subida")
-
-    com_posicao = sorted((r for r in readings if r.position), key=lambda r: r.ts)
-    if len(com_posicao) < 2:
-        return 0.0
-
-    antiga, recente = com_posicao[0], com_posicao[-1]
-    if (recente.ts - antiga.ts).total_seconds() / 3600 < min_interval_hours:
-        return 0.0
-
-    antes = min(antiga.position, max_position)
-    agora = max(recente.position, 1)
-    if agora >= antes:
-        return 0.0
-    return min(math.log(antes / agora) / math.log(max_position), 1.0)
+    return rank_momentum_medido(
+        readings, max_position=max_position, min_interval_hours=min_interval_hours
+    ).valor

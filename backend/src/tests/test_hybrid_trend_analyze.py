@@ -436,3 +436,30 @@ def test_conta_acertos_e_erros_do_cache_do_llm(db, monkeypatch):
     mod.hybrid_trend_analyze(hours=72)
 
     assert contados == {"hit": 0, "miss": 2}
+
+
+def test_item_do_ml_sem_historico_vale_zero_e_loga_o_motivo(db, caplog):
+    # TIE-16: uma leitura só → rank e reviews valem 0.0 e o log diz por quê.
+    # Vídeo do TikTok nunca tem ranking: não loga (seria ruído a cada ciclo).
+    db["products"].insert_one({"product_id": "ml1", "title": "Air fryer", "source": "mercadolivre"})
+    db["metrics"].insert_one(
+        {
+            "product_id": "ml1",
+            "ts": utcnow() - dt.timedelta(hours=1),
+            "source": "mercadolivre",
+            "rank_position": 3,
+            "reviews_total": 10,
+            "price": 300.0,
+        }
+    )
+
+    with caplog.at_level("INFO", logger=mod.logger.name):
+        mod.hybrid_trend_analyze(hours=72)
+
+    registros = [r for r in caplog.records if r.getMessage() == "score.sem_historico"]
+    assert {(r.product_id, r.componente, r.motivo) for r in registros} == {
+        ("ml1", "rank_momentum", "leitura_unica"),
+        ("ml1", "reviews_velocity", "leitura_unica"),
+    }
+    comps = db["trend_insights"].find_one({"product_id": "ml1"})["debug"]["numeric_components"]
+    assert comps["nm_rank"] == 0.0

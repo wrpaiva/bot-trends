@@ -8,7 +8,8 @@ import datetime as dt
 
 import pytest
 
-from src.domain.rank_momentum import RankReading, rank_momentum
+from src.domain.rank_momentum import RankReading, rank_momentum, rank_momentum_medido
+from src.domain.trend_signals import Medida
 
 T0 = dt.datetime(2026, 10, 3, tzinfo=dt.UTC)
 
@@ -73,3 +74,27 @@ def test_posicao_alem_do_teto_satura_em_1():
 def test_max_position_precisa_ser_maior_que_1():
     with pytest.raises(ValueError):
         rank_momentum(_leituras(2, 1), max_position=1)
+
+
+# --- Motivo do zero (TIE-16: "sem histórico suficiente → 0.0, com log") ------
+
+
+@pytest.mark.parametrize(
+    "leituras, motivo",
+    [
+        ([], "sem_ranking"),
+        ([RankReading(ts=T0, position=None)], "sem_ranking"),
+        (_leituras(3), "leitura_unica"),
+        (_leituras(10, 1, passo_h=0), "intervalo_curto"),
+    ],
+)
+def test_sem_historico_diz_o_motivo(leituras, motivo):
+    m = rank_momentum_medido(leituras)
+    assert m.valor == 0.0
+    assert m.motivo == motivo
+
+
+def test_parado_e_medida_real_sem_motivo():
+    # Zero por não ter subido não é falta de histórico
+    assert rank_momentum_medido(_leituras(5, 5)) == Medida(0.0, None)
+    assert rank_momentum_medido(_leituras(20, 1), max_position=20).motivo is None
