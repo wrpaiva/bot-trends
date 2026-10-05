@@ -425,7 +425,15 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   com `X-API-Key`) expõe HTTP por rota e o estado do sistema medido no scrape
   (`src/infrastructure/observability.py`, sem dependência nova). **Rótulo `route` é o template
   da rota, nunca a URL** — um produto não pode virar série. Contadores HTTP são por processo:
-  com mais de um worker uvicorn, troque por `prometheus_client` multiprocesso.
+  com mais de um worker uvicorn, troque por `prometheus_client` multiprocesso. Métricas do
+  **worker** (duração das tasks, itens coletados, chamadas ao LLM) vão para o Redis
+  (`RedisMetricsStore`, hash `obs:metrics`): **métrica nova do worker usa `safe_inc`/`safe_observe`
+  e entra em `WORKER_METRICS`** (tipo e ajuda). Histograma declara `# TYPE` na **família**
+  (`trends_x`), nunca em `trends_x_bucket` — a 1ª versão fez isso e o parser do Prometheus lê
+  errado; `Sample.family` resolve. Prometheus + Grafana (dashboard e regras de alerta
+  provisionados) sobem com `--profile observability`; config em `infra/observability/`, validada
+  com `promtool check config`. A chave da API chega ao scrape por arquivo, escrito pelo
+  entrypoint: o Prometheus não expande variável de ambiente.
 - **Índice de texto recusava vídeo em árabe.** O índice da v005 usava o `language_override`
   padrão do Mongo: o campo `language` do documento escolhe o stemming. A coleta passou a gravar
   `language` com o idioma do vídeo, e idioma não suportado (`ar`, `ms`, `un`...) fazia a escrita

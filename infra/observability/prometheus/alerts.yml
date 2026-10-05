@@ -1,0 +1,62 @@
+# Regras de alerta (TIE-36). Sem Alertmanager no compose: os alertas aparecem
+# em Prometheus → Alerts e no Grafana. A entrega no Telegram continua sendo o
+# check de saúde do worker (TIE-39, TELEGRAM_SYSTEM_CHAT_ID), que usa os
+# mesmos limites: 2 ciclos sem coleta.
+groups:
+  - name: trends
+    rules:
+      - alert: ColetaTikTokParada
+        # TIKTOK_INTERVAL_MIN padrão = 120 → 2 ciclos = 4 h
+        expr: trends_last_collection_age_seconds{source="tiktok"} > 4 * 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Coleta do TikTok não roda no período esperado"
+          description: "Última leitura do TikTok há {{ $value | humanizeDuration }} (limite: 2 ciclos de 2 h)."
+
+      - alert: ColetaMercadoLivreParada
+        # collect_ml roda a cada 6 h → 2 ciclos = 12 h
+        expr: trends_last_collection_age_seconds{source="mercadolivre"} > 12 * 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Coleta do Mercado Livre não roda no período esperado"
+          description: "Última leitura do ML há {{ $value | humanizeDuration }} (limite: 2 ciclos de 6 h)."
+
+      - alert: AnaliseParada
+        # A análise roda a cada 30 min; sem métrica nova ela não grava insight
+        expr: trends_last_insight_age_seconds > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nenhum insight novo há mais de 1 h"
+          description: "Último insight há {{ $value | humanizeDuration }}. Confira primeiro se a coleta está parada."
+
+      - alert: LLMSempreNoFallback
+        expr: trends_llm_fallback_ratio > 0.5 and trends_llm_fallback_sample >= 10
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mais da metade dos insights sem LLM"
+          description: "{{ $value | humanizePercentage }} dos insights das últimas 6 h caíram no score só numérico."
+
+      - alert: ComponenteFora
+        expr: trends_component_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.component }} não respondeu ao /metrics"
+
+      - alert: ApiSemMetricas
+        expr: up{job="trends_api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus não consegue ler o /metrics da API"
+          description: "API fora do ar ou X-API-Key errada (401)."

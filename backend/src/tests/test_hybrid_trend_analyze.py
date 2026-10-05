@@ -423,3 +423,16 @@ def test_reviews_velocity_e_vendas_vem_da_coleta_do_ml(db):
     assert nm_reviews == {"ml1": pytest.approx(0.6), "p1": 0.0, "p2": 0.0}
     prompt_ml = next(p for p in _LLM.prompts if "Air fryer" in p)
     assert '"sold_quantity": 120' in prompt_ml
+
+
+def test_conta_acertos_e_erros_do_cache_do_llm(db, monkeypatch):
+    # TIE-36: o /metrics mostra quanto o cache economiza de chamada
+    contados = {}
+    monkeypatch.setattr(
+        mod, "safe_inc", lambda nome, rot, valor=1: contados.__setitem__(rot["result"], valor)
+    )
+    monkeypatch.setattr(mod, "_build_llm_cache", lambda: _CacheMemoria())
+
+    mod.hybrid_trend_analyze(hours=72)
+
+    assert contados == {"hit": 0, "miss": 2}

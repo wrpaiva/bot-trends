@@ -109,3 +109,31 @@ def test_sem_config_falha_rapido(monkeypatch):
     monkeypatch.setattr(llm_mod.settings, "LLM_API_KEY", None)
     with pytest.raises(RuntimeError, match="LLM_API_KEY"):
         OpenAICompatibleLLMClient()
+
+
+# --- Contagem de chamadas (TIE-36) -------------------------------------------
+
+
+@pytest.fixture
+def contadas(monkeypatch):
+    chamadas: list[str] = []
+    monkeypatch.setattr(
+        llm_mod, "safe_inc", lambda nome, rotulos, valor=1: chamadas.append(rotulos["result"])
+    )
+    return chamadas
+
+
+def test_toda_chamada_real_e_contada_pelo_resultado(contadas):
+    _client(lambda r: _completion(json.dumps(RESPOSTA))).analyze_trend("s", "u")
+    with pytest.raises(httpx.HTTPStatusError):
+        _client(lambda r: httpx.Response(429)).analyze_trend("s", "u")
+    with pytest.raises(LLMResponseError):
+        _client(lambda r: _completion("não é json")).analyze_trend("s", "u")
+
+    def timeout(request):
+        raise httpx.ReadTimeout("demorou", request=request)
+
+    with pytest.raises(httpx.TimeoutException):
+        _client(timeout).analyze_trend("s", "u")
+
+    assert contadas == ["ok", "http_429", "resposta_invalida", "erro_rede"]

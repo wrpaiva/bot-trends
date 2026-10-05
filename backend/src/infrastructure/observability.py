@@ -13,6 +13,11 @@ Duas fontes:
   última coleta e do último insight, fallback do LLM, filas, circuitos,
   backup). São os números por trás do check de saúde (TIE-39), que só diz
   ok/problema com limiares fixos; aqui o limiar fica com quem consome.
+- `RedisMetricsStore`: contadores e histogramas do WORKER (duração das tasks,
+  itens coletados, chamadas ao LLM). O worker roda em vários processos que a
+  API não enxerga; no Redis (`HINCRBYFLOAT` num hash) eles se somam e
+  sobrevivem a restart, que é o que o Prometheus espera de um counter.
+  Gravar métrica nunca derruba task: `safe_inc`/`safe_observe` engolem erro.
 
 Sem dependência nova: o formato de texto é simples e o volume é pequeno.
 Componente fora (Mongo, Redis) não derruba o scrape: some a parte dele e
@@ -22,8 +27,10 @@ Componente fora (Mongo, Redis) não derruba o scrape: some a parte dele e
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
@@ -37,6 +44,24 @@ QUEUES = ("celery", "ml", "tiktok", "trend")
 SOURCES = ("tiktok", "mercadolivre")
 BREAKER_STATES = ("closed", "open", "half_open", "unknown")
 DEFAULT_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
+# Tasks vão de segundos (health) a minutos (coleta do TikTok espera a Apify)
+TASK_BUCKETS = (1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0)
+STORE_KEY = "obs:metrics"
+
+# Métricas que o worker grava no Redis: tipo e ajuda
+WORKER_METRICS = {
+    "trends_task_runs_total": (
+        "counter",
+        "Execuções de task por estado do Celery e status devolvido",
+    ),
+    "trends_task_duration_seconds": ("histogram", "Duração das tasks do Celery, em segundos"),
+    "trends_collected_items_total": (
+        "counter",
+        "Itens gravados pelas tasks de coleta (`inserted`)",
+    ),
+    "trends_llm_calls_total": ("counter", "Chamadas HTTP reais ao LLM por resultado (custo)"),
+    "trends_llm_cache_total": ("counter", "Consultas ao cache do LLM: hit evita chamada"),
+}
 # Mesma janela do check de fallback do LLM (tasks_health)
 LLM_FALLBACK_WINDOW = dt.timedelta(hours=6)
 
@@ -48,6 +73,9 @@ class Sample:
     labels: dict[str, str] = field(default_factory=dict)
     help: str = ""
     kind: str = "gauge"
+    # Histograma: as séries _bucket/_sum/_count pertencem à família `trends_x`,
+    # e é ela que leva o HELP/TYPE — `# TYPE trends_x_bucket` quebra o parser
+    family: str | None = None
 
 
 def _escapa(valor: str) -> str:
@@ -59,14 +87,15 @@ def _numero(v: float) -> str:
 
 
 def render(samples: list[Sample]) -> str:
-    """Texto de exposição (versão 0.0.4); HELP/TYPE uma vez por métrica."""
+    """Texto de exposição (versão 0.0.4); HELP/TYPE uma vez por família."""
     linhas: list[str] = []
     vistos: set[str] = set()
     for s in samples:
-        if s.name not in vistos:
-            vistos.add(s.name)
-            linhas.append(f"# HELP {s.name} {s.help}")
-            linhas.append(f"# TYPE {s.name} {s.kind}")
+        familia = s.family or s.name
+        if familia not in vistos:
+            vistos.add(familia)
+            linhas.append(f"# HELP {familia} {s.help}")
+            linhas.append(f"# TYPE {familia} {s.kind}")
         rotulos = ""
         if s.labels:
             rotulos = "{" + ",".join(f'{k}="{_escapa(str(v))}"' for k, v in s.labels.items()) + "}"
@@ -112,34 +141,148 @@ class HttpMetrics:
             )
             for (m, r, st), v in sorted(total.items())
         ]
-        ajuda = "Latência das requisições à API, em segundos"
+        fam = "trends_http_request_duration_seconds"
+        meta = {"help": "Latência das requisições à API, em segundos", "kind": "histogram"}
         for (m, r), contagens in sorted(buckets.items()):
             rot = {"method": m, "route": r}
             out += [
-                Sample(
-                    "trends_http_request_duration_seconds_bucket",
-                    c,
-                    {**rot, "le": str(limite)},
-                    help=ajuda,
-                    kind="histogram",
-                )
+                Sample(f"{fam}_bucket", c, {**rot, "le": str(limite)}, family=fam, **meta)
                 for limite, c in zip(self.buckets, contagens, strict=True)
             ]
             out.append(
-                Sample(
-                    "trends_http_request_duration_seconds_bucket",
-                    n[(m, r)],
-                    {**rot, "le": "+Inf"},
-                    help=ajuda,
-                    kind="histogram",
-                )
+                Sample(f"{fam}_bucket", n[(m, r)], {**rot, "le": "+Inf"}, family=fam, **meta)
             )
-            out.append(Sample("trends_http_request_duration_seconds_sum", soma[(m, r)], rot))
-            out.append(Sample("trends_http_request_duration_seconds_count", n[(m, r)], rot))
+            out.append(Sample(f"{fam}_sum", soma[(m, r)], rot, family=fam, **meta))
+            out.append(Sample(f"{fam}_count", n[(m, r)], rot, family=fam, **meta))
         return out
 
 
 http_metrics = HttpMetrics()
+
+
+class RedisMetricsStore:
+    """Contadores/histogramas compartilhados entre processos, num hash do Redis."""
+
+    def __init__(self, client: Any, key: str = STORE_KEY):
+        self.client = client
+        self.key = key
+
+    @staticmethod
+    def _campo(nome: str, labels: dict[str, str]) -> str:
+        return json.dumps([nome, sorted(labels.items())], ensure_ascii=False)
+
+    def inc(self, nome: str, labels: dict[str, str], valor: float = 1.0) -> None:
+        self.client.hincrbyfloat(self.key, self._campo(nome, labels), valor)
+
+    def observe(
+        self,
+        nome: str,
+        labels: dict[str, str],
+        valor: float,
+        *,
+        buckets: tuple[float, ...] = TASK_BUCKETS,
+    ) -> None:
+        pipe = self.client.pipeline(transaction=False)
+        for limite in buckets:
+            if valor <= limite:
+                pipe.hincrbyfloat(
+                    self.key, self._campo(f"{nome}_bucket", {**labels, "le": str(limite)}), 1
+                )
+        pipe.hincrbyfloat(self.key, self._campo(f"{nome}_bucket", {**labels, "le": "+Inf"}), 1)
+        pipe.hincrbyfloat(self.key, self._campo(f"{nome}_sum", labels), valor)
+        pipe.hincrbyfloat(self.key, self._campo(f"{nome}_count", labels), 1)
+        pipe.execute()
+
+    def samples(self) -> list[Sample]:
+        out = []
+        for campo, valor in self.client.hgetall(self.key).items():
+            nome, labels = json.loads(campo)
+            familia = nome
+            for sufixo in ("_bucket", "_sum", "_count"):
+                if nome.endswith(sufixo) and nome.removesuffix(sufixo) in WORKER_METRICS:
+                    familia = nome.removesuffix(sufixo)
+            kind, ajuda = WORKER_METRICS.get(familia, ("untyped", ""))
+            out.append(
+                Sample(nome, float(valor), dict(labels), help=ajuda, kind=kind, family=familia)
+            )
+
+        sufixos = {"_bucket": 0, "_sum": 1, "_count": 2}
+
+        def _ordem(x: Sample) -> tuple:
+            # Família contígua; dentro dela, por série, buckets (le crescente),
+            # depois _sum e _count
+            le = x.labels.get("le")
+            serie = sorted((k, v) for k, v in x.labels.items() if k != "le")
+            sufixo = x.name.removeprefix(x.family or "")
+            return (
+                x.family,
+                serie,
+                sufixos.get(sufixo, 0),
+                float("inf") if le == "+Inf" else float(le or 0),
+            )
+
+        return sorted(out, key=_ordem)
+
+
+_store: RedisMetricsStore | None = None
+
+
+def metrics_store() -> RedisMetricsStore:
+    """Store do processo atual, criado sob demanda (depois do fork do Celery)."""
+    global _store
+    if _store is None:
+        import redis
+
+        from src.infrastructure.config import settings
+
+        _store = RedisMetricsStore(
+            redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        )
+    return _store
+
+
+def safe_inc(nome: str, labels: dict[str, str], valor: float = 1.0) -> None:
+    try:
+        metrics_store().inc(nome, labels, valor)
+    except Exception as e:  # noqa: BLE001 — métrica não derruba task
+        logger.debug("Métrica %s não gravada: %s", nome, e)
+
+
+def safe_observe(nome: str, labels: dict[str, str], valor: float) -> None:
+    try:
+        metrics_store().observe(nome, labels, valor)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Métrica %s não gravada: %s", nome, e)
+
+
+# --- Sinais do Celery --------------------------------------------------------
+
+_inicios: dict[str | None, float] = {}
+
+
+def on_task_prerun_metrics(task_id: str | None = None, **_: Any) -> None:
+    _inicios[task_id] = time.perf_counter()
+
+
+def on_task_postrun_metrics(
+    task_id: str | None = None,
+    task: Any = None,
+    retval: Any = None,
+    state: str | None = None,
+    **_: Any,
+) -> None:
+    t0 = _inicios.pop(task_id, None)
+    nome = getattr(task, "name", "desconhecida")
+    status = retval.get("status") if isinstance(retval, dict) else None
+    safe_inc(
+        "trends_task_runs_total",
+        {"task": nome, "state": state or "none", "status": str(status or "none")},
+    )
+    if t0 is not None:
+        safe_observe("trends_task_duration_seconds", {"task": nome}, time.perf_counter() - t0)
+    inseridos = retval.get("inserted") if isinstance(retval, dict) else None
+    if isinstance(inseridos, int) and not isinstance(inseridos, bool):
+        safe_inc("trends_collected_items_total", {"task": nome}, inseridos)
 
 
 def _idade_s(now: dt.datetime, ts: Any) -> float:
@@ -158,6 +301,15 @@ def _mongo_samples(db, now: dt.datetime) -> list[Sample]:
                     _idade_s(now, doc["ts"]),
                     {"source": fonte},
                     help="Segundos desde a última leitura gravada por fonte",
+                )
+            )
+            # A coleta grava todas as leituras do ciclo com o mesmo `ts`
+            out.append(
+                Sample(
+                    "trends_last_collection_items",
+                    db["metrics"].count_documents({"source": fonte, "ts": doc["ts"]}),
+                    {"source": fonte},
+                    help="Leituras gravadas no último ciclo de coleta da fonte",
                 )
             )
         out.append(
@@ -238,7 +390,7 @@ def _mongo_samples(db, now: dt.datetime) -> list[Sample]:
 
 
 def _redis_samples(client) -> list[Sample]:
-    return [
+    filas = [
         Sample(
             "trends_celery_queue_length",
             int(client.llen(fila) or 0),
@@ -247,6 +399,7 @@ def _redis_samples(client) -> list[Sample]:
         )
         for fila in QUEUES
     ]
+    return filas + RedisMetricsStore(client).samples()
 
 
 def _breaker_samples(breakers: dict[str, dict[str, Any]]) -> list[Sample]:
