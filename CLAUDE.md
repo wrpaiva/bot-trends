@@ -64,6 +64,13 @@ docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE
   "pytest -p no:cacheprovider src/tests -q && ruff check --no-cache . && black --check ."
 ```
 Sem o `--user`, o container grava `__pycache__` e `.ruff_cache` como root dentro de `backend/`.
+Montando só `backend/`, os testes que leem arquivos da raiz são **pulados** (`test_docs` e
+`test_healthchecks_do_compose`) — e o CI os roda. Antes de abrir PR que mexe em README, compose
+ou Dockerfile, monte o repositório inteiro, como o CI vê:
+```bash
+docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
+  -v $PWD:/repo -w /repo/backend trends-dev pytest -p no:cacheprovider src/tests -q
+```
 
 Testes que precisam de Mongo real (hoje só `test_search.py`: o mongomock não implementa `$text`)
 leem `MONGO_TEST_URI` e são **pulados** sem ela. O CI sobe um `mongo:7` e roda sempre. Local,
@@ -342,7 +349,15 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   `disable: true` — antes os dois herdavam o curl HTTP e apareciam `unhealthy` à toa. Com o
   Redis fora, o limiter cai para contador em memória (`in_memory_fallback_enabled`). **Não use
   `swallow_errors`**: no slowapi 0.1.10 ele quebra o middleware. Compose não reinicia container
-  `unhealthy` — só os que terminam (TIE-38).
+  `unhealthy` — só os que terminam: o `HEALTHCHECK` da API roda `apps/healthcheck/main.py`, que
+  só marca `unhealthy` quando a readiness falha e **encerra a API** quando a liveness falha 3×
+  seguidas, para o restart policy subir de novo (TIE-38). **Depende de `init: true`** no serviço
+  `api`: sem ele a API é o PID 1, que ignora SIGKILL de dentro do container. A contagem é por
+  processo (PID + início no `/proc`), então não mata a API nova no meio da subida. Liveness (3 s)
+  + espera do TERM (5 s) cabem no `--timeout=15s` do HEALTHCHECK — encolher o timeout faz o
+  Docker matar o script antes do KILL. Na imagem slim não há binário `kill` (é builtin do sh).
+  Testado em 2026-10-05: SIGSTOP no uvicorn → container reiniciado e `healthy`; Mongo parado →
+  `unhealthy` sem reinício.
 - **Nada era logado.** Agora `src/infrastructure/logging_setup.py` põe API, worker e beat em JSON
   (`LOG_FORMAT=text` para ler no terminal), com **redação na string final**: valores de
   credenciais do `settings`, senha em URI, `Bearer`, `token=` e `/bot<token>` viram `***`.

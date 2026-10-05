@@ -49,11 +49,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8000
 
-# Health check
-# Readiness: 503 só com Mongo fora (TIE-38). worker e beat usam esta imagem,
-# mas o compose sobrescreve o healthcheck deles — não servem HTTP.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health/ready || exit 1
+# Health check (TIE-38): readiness falhando (Mongo fora) só marca unhealthy;
+# liveness falhando 3× seguidas encerra a API e o restart policy a sobe de
+# novo — exige `init: true` no compose (apps/healthcheck/main.py). worker e
+# beat usam esta imagem, mas o compose sobrescreve o healthcheck deles.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=10s --retries=3 \
+    CMD python -m apps.healthcheck.main || exit 1
 
 CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 

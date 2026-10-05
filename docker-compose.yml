@@ -88,6 +88,9 @@ services:
       target: production
     container_name: trends_api
     restart: unless-stopped
+    # PID 1 = tini, a API é filho comum: o healthcheck consegue encerrá-la
+    # quando trava, e o restart policy a sobe de novo (TIE-38)
+    init: true
     env_file:
       - ./backend/.env
     environment:
