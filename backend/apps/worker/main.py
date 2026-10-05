@@ -15,6 +15,7 @@ from celery.signals import (
 from src.infrastructure.config import settings
 from src.infrastructure.db.mongo import close_client, reset_client_after_fork
 from src.infrastructure.logging_setup import configure_logging, on_task_postrun, on_task_prerun
+from src.infrastructure.observability import on_task_postrun_metrics, on_task_prerun_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,9 @@ def _configura_logging(**_):
 # Início, fim, duração e contagens de toda task, num lugar só
 task_prerun.connect(on_task_prerun)
 task_postrun.connect(on_task_postrun)
+# Duração, execuções e itens coletados no Redis, para o /metrics (TIE-36)
+task_prerun.connect(on_task_prerun_metrics)
+task_postrun.connect(on_task_postrun_metrics)
 
 
 @worker_init.connect

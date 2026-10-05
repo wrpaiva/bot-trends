@@ -384,17 +384,34 @@ Três camadas, cada uma para uma pergunta:
 |---|---|---|
 | Logs JSON | O que aconteceu nesta task/requisição? | `docker compose logs`; `task.inicio`/`task.fim`, `http.chamada` (TIE-13) |
 | Check de saúde | Tem algo quebrado agora? (ok/problema, com limiar) | Telegram `TELEGRAM_SYSTEM_CHAT_ID`, a cada 15 min (TIE-39) |
-| `GET /metrics` | Quanto, desde quando, com que tendência? | Formato Prometheus, exige `X-API-Key` |
+| `GET /metrics` + Prometheus/Grafana | Quanto, desde quando, com que tendência? | Formato Prometheus, exige `X-API-Key`; dashboard e regras no profile `observability` |
 
 ```bash
 curl -H "X-API-Key: $API_KEY" http://localhost:8000/metrics
+
+# Prometheus (:9090) + Grafana (:3000), só em 127.0.0.1; portas em PROMETHEUS_HOST_PORT/GRAFANA_HOST_PORT
+docker compose --profile observability up -d prometheus grafana
 ```
+
+O Grafana abre no dashboard **Trends — visão geral** (coleta, análise e LLM, tasks, API, infra),
+com o datasource já provisionado (`infra/observability/grafana/`). Login `admin` com
+`GRAFANA_ADMIN_PASSWORD` do `.env` da raiz. O Prometheus avalia
+`infra/observability/prometheus/alerts.yml`: coleta do TikTok parada > 4 h, do ML > 12 h, análise
+parada > 1 h, LLM no fallback > 50%, componente fora, `/metrics` inacessível. **Sem Alertmanager:**
+os alertas aparecem em Prometheus → Alerts e no Grafana; quem avisa no Telegram continua sendo o
+check de saúde.
 
 | Métrica | Tipo | O que é |
 |---|---|---|
 | `trends_http_requests_total{method,route,status}` | counter | Requisições à API. `route` é o template (`/products/{product_id}/curve`); sem rota vira `nao_roteada` |
 | `trends_http_request_duration_seconds{method,route}` | histogram | Latência da API |
 | `trends_last_collection_age_seconds{source}` | gauge | Desde a última leitura da fonte (ausente = nunca coletou) |
+| `trends_last_collection_items{source}` | gauge | Leituras gravadas no último ciclo de coleta |
+| `trends_collected_items_total{task}` | counter | Itens gravados pelas tasks de coleta (`inserted`) |
+| `trends_task_runs_total{task,state,status}` | counter | Execuções de task (estado do Celery e `status` devolvido) |
+| `trends_task_duration_seconds{task}` | histogram | Duração das tasks |
+| `trends_llm_calls_total{result}` | counter | Chamadas HTTP reais ao LLM: `ok`, `http_429`, `erro_rede`, `resposta_invalida`... — é o que custa |
+| `trends_llm_cache_total{result}` | counter | Cache do LLM: `hit` poupa uma chamada |
 | `trends_last_insight_age_seconds` | gauge | Desde o último insight |
 | `trends_insights_24h` | gauge | Insights nas últimas 24 h |
 | `trends_products{source}` | gauge | Produtos/vídeos conhecidos |
@@ -405,8 +422,9 @@ curl -H "X-API-Key: $API_KEY" http://localhost:8000/metrics
 | `trends_component_up{component}` | gauge | Mongo e Redis responderam no scrape (0 = a parte dele some, o resto sai) |
 
 Os contadores HTTP vivem na memória do processo: zeram a cada restart da API e só valem com um
-worker uvicorn (o padrão). Não há Prometheus/Grafana no compose — o endpoint é o contrato para
-quem for coletar.
+worker uvicorn (o padrão). As métricas do worker (tasks, itens, LLM) moram no Redis (hash
+`obs:metrics`): somam os processos do Celery e sobrevivem a restart. Gravar métrica nunca derruba
+task — com o Redis fora, a métrica se perde e a task segue.
 
 ---
 

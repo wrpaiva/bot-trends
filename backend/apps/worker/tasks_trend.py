@@ -23,6 +23,7 @@ from src.infrastructure.db.mongo import get_db
 from src.infrastructure.db.trend_repos import TrendInsightRepo
 from src.infrastructure.llm.cache import RedisLLMCache
 from src.infrastructure.llm.openai_compatible import OpenAICompatibleLLMClient
+from src.infrastructure.observability import safe_inc
 from src.infrastructure.telegram.notifier import TelegramError, TelegramNotifier
 from src.infrastructure.utils.datetime_utils import ensure_utc, utcnow
 
@@ -355,6 +356,10 @@ def hybrid_trend_analyze(
             "hit_rate": round(engine.cache_hits / total, 3) if total else None,
         },
     )
+    if engine.cache is not None:
+        # Para o /metrics (TIE-36): quanto o cache poupa de chamada paga
+        safe_inc("trends_llm_cache_total", {"result": "hit"}, engine.cache_hits)
+        safe_inc("trends_llm_cache_total", {"result": "miss"}, engine.cache_misses)
     return {
         "status": "ok",
         "processed": len(active),

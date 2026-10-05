@@ -11,6 +11,7 @@ from src.domain.trend_models import LLMResult
 from src.infrastructure.config import settings
 from src.infrastructure.llm.schema import LLMResponseError, parse_llm_content
 from src.infrastructure.logging_setup import http_log_hooks
+from src.infrastructure.observability import safe_inc
 
 logger = logging.getLogger(__name__)
 
@@ -62,15 +63,26 @@ class OpenAICompatibleLLMClient(LLMClient):
             "Content-Type": "application/json",
         }
 
-        r = self.client.post(url, headers=headers, json=payload)
-        r.raise_for_status()
+        # Toda chamada real é contada pelo resultado (TIE-36): é o que custa
+        try:
+            r = self.client.post(url, headers=headers, json=payload)
+        except httpx.HTTPError:
+            safe_inc("trends_llm_calls_total", {"result": "erro_rede"})
+            raise
+        if r.is_error:
+            safe_inc("trends_llm_calls_total", {"result": f"http_{r.status_code}"})
+            r.raise_for_status()
 
         try:
             content = r.json()["choices"][0]["message"]["content"]
-        except (ValueError, KeyError, IndexError, TypeError):
+            # Validação e clamp dos campos (TIE-24)
+            res = parse_llm_content(content)
+        except (ValueError, KeyError, IndexError, TypeError, LLMResponseError) as e:
+            safe_inc("trends_llm_calls_total", {"result": "resposta_invalida"})
+            if isinstance(e, LLMResponseError):
+                raise
             raise LLMResponseError(
                 "envelope da resposta fora do formato chat/completions"
             ) from None
-
-        # Validação e clamp dos campos (TIE-24)
-        return parse_llm_content(content)
+        safe_inc("trends_llm_calls_total", {"result": "ok"})
+        return res
