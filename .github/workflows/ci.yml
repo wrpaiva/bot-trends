@@ -114,6 +114,39 @@ jobs:
             echo "::error::API_KEY vazou para o bundle (dist)"; exit 1
           fi
 
+  deploy-config:
+    name: Deploy · config
+    runs-on: ubuntu-latest
+    # Valores fictícios: só validam a forma (TIE-34). O hash é de "ci".
+    env:
+      API_KEY: ci
+      DOMAIN: ci.exemplo.com
+      ACME_EMAIL: ci@exemplo.com
+      BASIC_AUTH_USER: ci
+      BASIC_AUTH_HASH: $2a$14$RKmxIb3crcrsIKREcnvYJ.MfILPpskd.GMuYGP7rcbM8DiqHSoKmW
+    steps:
+      - uses: actions/checkout@v4
+
+      # Só o Caddy pode publicar porta no host; o resto fica nas redes internas
+      - name: compose de produção
+        run: |
+          touch backend/.env
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config --format json > prod.json
+          python3 - <<'PY'
+          import json
+          svcs = json.load(open("prod.json"))["services"]
+          expostos = sorted(n for n, s in svcs.items() if s.get("ports") and n != "caddy")
+          assert not expostos, f"publicam porta no host em produção: {expostos}"
+          assert svcs["api"]["environment"]["CORS_ORIGINS"] == "", "CORS_ORIGINS deve ser vazio"
+          print("ok: só o caddy publica porta;", sorted(svcs))
+          PY
+
+      - name: Caddyfile
+        run: |
+          docker run --rm -e DOMAIN -e ACME_EMAIL -e BASIC_AUTH_USER -e BASIC_AUTH_HASH \
+            -v "$PWD/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.10.0 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
   docker-build:
     name: Docker · build ${{ matrix.servico }}
     runs-on: ubuntu-latest

@@ -83,6 +83,17 @@ docker compose run --rm api python -m apps.backtest.main --horizon-hours 6
 Com pool pequeno (≤ 2k vídeos por corte) a precisão no top-k acerta por acaso — o relatório
 avisa; olhe o Spearman. Mexeu no motor? Rode antes e depois.
 
+Produção (VPS, TLS + basic auth no Caddy — procedimento em `docs/DEPLOY.md`):
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# na VPS, COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml no .env dispensa os -f
+```
+O override zera as portas herdadas com `!reset []` (Compose ≥ 2.24): **serviço novo que publica
+porta no compose base precisa de `ports: !reset []` no prod**, senão fica exposto na VPS (o
+Docker passa por fora do ufw). `BASIC_AUTH_HASH` vai no `.env` **entre aspas simples** — sem
+elas o compose expande os `$` do bcrypt e o login nunca bate. O `docker compose config` mostra o
+hash com `$$`: é só o escape da saída, o container recebe o valor certo.
+
 Rodar uma análise manual:
 ```bash
 docker compose run --rm api python -c \
