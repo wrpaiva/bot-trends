@@ -172,17 +172,28 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    `/highlights`, `/sites/MLB/search` e `/items` exigem `Bearer`. O OAuth está implementado
    (TIE-41, `collectors/ml_auth.py`), mas **só funciona depois que alguém cria o app no ML e roda
    `python -m apps.ml_auth.main` uma vez** (fluxo `authorization_code` no navegador). Até lá
-   `collect_ml` devolve `status: error` com o motivo em `reason`. **Ainda não confirmado com
-   token real:** se `/highlights` responde a token de usuário comum; se não responder, a origem
-   do collector muda e a Fase 2 fica maior. O refresh token é de **uso único**: nunca renove
+   `collect_ml` devolve `status: error` com o motivo em `reason`. **Autorizado em 2026-10-06**
+   (user_id 94998101). Três coisas travaram a autorização: o app precisa do escopo
+   `offline_access` **e** de o usuário revogar o acesso antigo antes de autorizar de novo (sem
+   isso o ML responde sem `refresh_token`); o code só vale com o `code_verifier` do mesmo
+   processo que gerou a URL (PKCE); e a página `waurumai.com/callback` troca o code por `TG-...`
+   na barra — copie a URL pela aba Network do DevTools. **Com token real (2026-10-06):**
+   `/highlights` responde 200, mas só com `PRODUCT`/`USER_PRODUCT` (nenhum `ITEM`; `?type=ITEM`
+   dá 400), e `/items`, `/items?ids=`, `/sites/MLB/search` e `/user-products` dão **403** a
+   token de usuário comum. Funcionam `/products/{id}` (nome, atributos; `buy_box_winner` veio
+   `null`) e `/products/{id}/items` (ofertas: preço, vendedor — sem `sold_quantity`); nenhuma
+   rota de reviews responde (`/reviews/item` 403 no item, 404 no produto). **Por isso o
+   collector parte do catálogo:** `source_product_id` é o id do **produto** (não do anúncio),
+   preço = buy box ou menor oferta, `category` = categoria do ranking, `USER_PRODUCT` fica de
+   fora sem contar erro. Validado em 2026-10-06 com `MLB1051`: 18 produtos, 0 erros (2 `USER_PRODUCT` de fora). A menor oferta pode ser anúncio fora da curva (fone a R$ 10). O refresh token é de **uso único**: nunca renove
    fora de `MercadoLivreAuth` (ele grava o par novo com compare-and-set no Mongo, `ml_oauth`);
    um refresh "de teste" à mão invalida o token do worker.
 2. **`rank_momentum` e `reviews_velocity` só existem para item do ML** (TIE-16). A coleta grava
-   `rank_position` (`/highlights`), `reviews_total` (`/reviews/item`, uma requisição a mais por
-   item) e `sold_quantity` (TIE-14/15); as regras ficam em `src/domain/rank_momentum.py` e
-   `reviews_velocity.py`. Vídeo do TikTok fica em 0 nos dois, e o ML ainda não coleta (TIE-41):
-   na prática, 35% do score numérico segue zero. **Nada disso foi validado com dados reais** —
-   nem se `/reviews/item` responde a token comum, nem se `/items` ainda devolve `sold_quantity`.
+   `rank_position` (`/highlights`); `reviews_total` e `sold_quantity` saem **None** desde
+   2026-10-06, porque `/reviews/item` e `/items` dão 403 a token comum (armadilha 1) — o
+   `reviews_velocity` do ML fica em 0 com `score.sem_historico` até achar outra fonte. As regras
+   ficam em `src/domain/rank_momentum.py` e `reviews_velocity.py`. Vídeo do TikTok fica em 0
+   nos dois: na prática, a maior parte desses 35% do score numérico segue zero.
    `reviews_delta` é None sem leitura anterior (era 0) e ninguém o lê: o score usa o total.
    Item do ML sem histórico suficiente (sem ranking/avaliação, leitura única, leituras < 1 h)
    vale 0.0 e loga `score.sem_historico` com `componente` e `motivo`; parado/caindo é 0 medido,

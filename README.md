@@ -251,7 +251,7 @@ não sobe). Cada insight grava os pesos usados em `score_weights`.
 | Componente | Peso | Normalização |
 |---|---|---|
 | `rank_momentum` | 0,20 | subida no `/highlights` do ML entre a leitura mais antiga e a mais recente da janela, em escala log (20º → 1º = 1; parado, caindo ou sem ranking — TikTok — = 0) |
-| `reviews_velocity` | 0,15 | avaliações novas por dia (`/reviews/item` do ML, mais antiga × mais recente da janela); percentil na categoria (ou 0–50/dia). Sem avaliação — TikTok — = 0 |
+| `reviews_velocity` | 0,15 | avaliações novas por dia (`/reviews/item` do ML, mais antiga × mais recente da janela); percentil na categoria (ou 0–50/dia). Sem avaliação — TikTok, e o ML desde 2026-10 (`/reviews/item` dá 403 a token comum) — = 0 |
 | aceleração (`social_velocity`) | 0,25 | quanto o ritmo entre as 2 últimas leituras supera o ritmo médio de vida; 0 com leitura única ou abaixo de 1.000 views |
 | views por hora de vida | 0,15 | percentil na categoria (ou escala log até 100 mil/h no modo absoluto) |
 | engajamento por hora de vida | 0,15 | percentil na categoria (ou escala log até 10 mil/h) |

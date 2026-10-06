@@ -20,7 +20,13 @@ logger = logging.getLogger(__name__)
 class MercadoLivreCollector:
     """
     Coletor Mercado Livre baseado em /highlights (mais vendidos por categoria),
-    depois consulta /items em batch para enriquecer.
+    enriquecido pelo catálogo: /products/{id} (nome, marca, link) e
+    /products/{id}/items (ofertas, de onde sai o preço).
+
+    Por que catálogo e não anúncio: com token de usuário comum (2026-10-06) o
+    /highlights só devolve PRODUCT/USER_PRODUCT, e /items, /reviews/item,
+    /sites/.../search e /user-products dão 403. Por isso `sold_quantity` e
+    `reviews_total` saem None (sem fonte, não zero) e USER_PRODUCT fica de fora.
 
     Config (via `settings`):
       ML_BASE_URL (default: https://api.mercadolibre.com)
@@ -36,12 +42,9 @@ class MercadoLivreCollector:
       - Teto de requisições por minuto (ML_MAX_REQUESTS_PER_MINUTE)
       - `errors` conta as chamadas que falharam de vez, para a task não
         reportar sucesso numa coleta que não trouxe nada (TIE-17)
-      - Batch de items (até 20 por request)
       - Context manager para gerenciamento de recursos
       - Logging estruturado de erros
     """
-
-    BATCH_SIZE = 20  # Limite da API do ML
 
     def __init__(
         self,
@@ -110,19 +113,19 @@ class MercadoLivreCollector:
     @retry_transient(attempts=3, min_s=1, max_s=10)
     def _get_highlights(self, category_id: str) -> dict[str, int]:
         """
-        Itens em destaque (mais vendidos) de uma categoria: id → posição no
-        ranking (1 = primeiro), na ordem do ranking. A posição alimenta o
-        `rank_momentum` (TIE-16).
+        Produtos do catálogo em destaque (mais vendidos) de uma categoria:
+        id → posição no ranking (1 = primeiro), na ordem do ranking. A posição
+        alimenta o `rank_momentum` (TIE-16).
         """
         url = f"{self.base_url}/highlights/{self.site_id}/category/{category_id}"
         data = self._get(url).json()
 
-        # Formato típico: {"content":[{"id":"MLB....","type":"ITEM","position":1}, ...]}
+        # Formato: {"content":[{"id":"MLB....","type":"PRODUCT","position":1}, ...]}
         # Sem `position`, vale a ordem da lista (que já é a do ranking)
         content = data.get("content", []) or []
         posicoes: dict[str, int] = {}
         for ordem, it in enumerate(content, start=1):
-            if it.get("type") == "ITEM" and it.get("id"):
+            if it.get("type") == "PRODUCT" and it.get("id"):
                 posicoes[it["id"]] = int(it.get("position") or ordem)
             if len(posicoes) >= self.max_items_per_category:
                 break
@@ -130,100 +133,82 @@ class MercadoLivreCollector:
         return posicoes
 
     @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
-    def _get_items_batch(self, item_ids: list[str]) -> list[dict[str, Any]]:
-        """
-        Busca múltiplos items em uma única request (até 20).
-        Retorna lista de items válidos.
-        """
-        if not item_ids:
-            return []
-
-        ids_param = ",".join(item_ids[: self.BATCH_SIZE])
-        url = f"{self.base_url}/items?ids={ids_param}"
-        r = self._get(url)
-
-        results: list[dict[str, Any]] = []
-        for item_response in r.json():
-            if item_response.get("code") == 200:
-                body = item_response.get("body")
-                if body:
-                    results.append(body)
-            else:
-                item_id = item_response.get("body", {}).get("id", "unknown")
-                logger.debug(f"Item {item_id} retornou código {item_response.get('code')}")
-
-        return results
+    def _get_product(self, product_id: str) -> dict[str, Any]:
+        """Detalhe do produto do catálogo."""
+        data = self._get(f"{self.base_url}/products/{product_id}").json()
+        if not isinstance(data, dict):
+            raise ValueError("resposta do produto não é um objeto")
+        return data
 
     @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
-    def _get_reviews_total(self, item_id: str) -> int | None:
-        """Busca o total de avaliações públicas de um anúncio."""
-        url = f"{self.base_url}/reviews/item/{item_id}"
-        data = self._get(url).json()
-        if not isinstance(data, dict):
-            raise ValueError("resposta de avaliações não é um objeto")
-        paging = data.get("paging")
-        if paging is None:
-            return None
-        if not isinstance(paging, dict):
-            raise ValueError("campo paging da resposta de avaliações não é um objeto")
-        total = paging.get("total")
-        if total is None:
-            return None
-        if isinstance(total, bool) or (isinstance(total, float) and not total.is_integer()):
-            raise ValueError("total de avaliações não é um inteiro")
-        try:
-            parsed = int(total)
-        except (TypeError, ValueError) as e:
-            raise ValueError("total de avaliações não é um inteiro") from e
-        if parsed < 0:
-            raise ValueError("total de avaliações é negativo")
-        return parsed
+    def _get_offers(self, product_id: str) -> list[dict[str, Any]]:
+        """Anúncios ativos que vendem o produto (preço, vendedor, item_id)."""
+        data = self._get(f"{self.base_url}/products/{product_id}/items").json()
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list):
+            raise ValueError("resposta das ofertas sem lista de results")
+        return results
 
-    def _normalize_item(self, item: dict[str, Any]) -> dict[str, Any]:
-        """Normaliza um item do ML para o formato interno."""
+    def _normalize_product(
+        self, product: dict[str, Any], offers: list[dict[str, Any]] | None, category_id: str
+    ) -> dict[str, Any]:
+        """
+        Normaliza um produto do catálogo para o formato interno. O preço é o do
+        buy box quando existe, senão a menor oferta. `category` é a categoria do
+        ranking (não a folha do anúncio): é o grupo em que a posição faz sentido.
+        """
         # Brand costuma vir em attributes; não é garantido
         brand = None
-        for attr in item.get("attributes") or []:
+        for attr in product.get("attributes") or []:
             if attr.get("id") == "BRAND" and attr.get("value_name"):
                 brand = attr["value_name"]
                 break
 
+        price = currency = None
+        buy_box = product.get("buy_box_winner") or {}
+        if buy_box.get("price") is not None:
+            price, currency = buy_box["price"], buy_box.get("currency_id")
+        elif offers:
+            com_preco = [o for o in offers if o.get("price") is not None]
+            if com_preco:
+                mais_barata = min(com_preco, key=lambda o: o["price"])
+                price, currency = mais_barata["price"], mais_barata.get("currency_id")
+
         return {
             "source": "mercadolivre",
-            "source_product_id": item.get("id"),
-            "title": item.get("title"),
-            "price": item.get("price"),
-            "currency": item.get("currency_id"),
-            "permalink": item.get("permalink"),
-            "category": item.get("category_id"),
+            "source_product_id": product.get("id"),
+            "title": product.get("name"),
+            "price": price,
+            "currency": currency,
+            "permalink": product.get("permalink"),
+            "category": category_id,
             "brand": brand,
-            "canonical_id": item.get("id"),
-            "sold_quantity": item.get("sold_quantity"),
+            "canonical_id": product.get("id"),
+            "sold_quantity": None,
             "marketplace": {
-                "sold_quantity": item.get("sold_quantity"),
-                "available_quantity": item.get("available_quantity"),
-                "condition": item.get("condition"),
+                "offers": len(offers) if offers is not None else None,
+                "domain_id": product.get("domain_id"),
             },
         }
 
     def collect(self) -> Iterable[dict[str, Any]]:
         """
-        Yield de itens normalizados.
+        Yield de produtos normalizados.
 
-        Utiliza batch requests para melhor performance.
         Formato de saída:
           {
             "source": "mercadolivre",
-            "source_product_id": "...",
+            "source_product_id": "MLB...",   # id do produto no catálogo
             "title": "...",
-            "price": 123.0,
+            "price": 123.0,                  # buy box ou menor oferta; None sem oferta
             "currency": "BRL",
             "permalink": "...",
-            "category": "...",
+            "category": "...",               # categoria do ranking
             "brand": "...",
             "canonical_id": "...",
-            "marketplace": {...},
-            "rank_position": 1  # posição no /highlights da categoria
+            "sold_quantity": None,           # sem fonte com token comum
+            "marketplace": {"offers": 2, "domain_id": "..."},
+            "rank_position": 1               # posição no /highlights da categoria
           }
         """
         total_collected = 0
@@ -231,8 +216,7 @@ class MercadoLivreCollector:
         for cat in self.categories:
             try:
                 posicoes = self._get_highlights(cat)
-                item_ids = list(posicoes)
-                logger.info(f"Categoria {cat}: {len(item_ids)} items encontrados")
+                logger.info(f"Categoria {cat}: {len(posicoes)} produtos encontrados")
             except MLAuthError as e:
                 self._sem_token(e)
                 return
@@ -241,49 +225,36 @@ class MercadoLivreCollector:
                 self.errors += 1
                 continue
 
-            # Processa em batches de 20 (limite da API)
-            for i in range(0, len(item_ids), self.BATCH_SIZE):
-                batch_ids = item_ids[i : i + self.BATCH_SIZE]
-
+            for product_id, posicao in posicoes.items():
                 try:
-                    items = self._get_items_batch(batch_ids)
+                    product = self._get_product(product_id)
                 except MLAuthError as e:
                     self._sem_token(e)
                     return
-                except (httpx.HTTPError, json.JSONDecodeError) as e:
-                    logger.warning(f"Falha ao buscar batch de items: {e}")
+                except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
+                    logger.warning("Falha ao buscar o produto %s: %s", product_id, e)
                     self.errors += 1
                     continue
 
-                # A resposta de /items pode chegar em uma ordem diferente da de
-                # /highlights. Reconstituir a ordem do highlights garante que a
-                # posição persistida é sempre a do ranking desta categoria.
-                items_by_id = {item.get("id"): item for item in items}
-                for item_id in batch_ids:
-                    item = items_by_id.get(item_id)
-                    if item is None:
-                        continue
+                try:
+                    offers = self._get_offers(product_id)
+                except MLAuthError as e:
+                    self._sem_token(e)
+                    return
+                except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
+                    # Sem preço o produto ainda tem posição no ranking, mas a
+                    # coleta fica parcialmente falha.
+                    logger.warning("Falha ao buscar ofertas do produto %s: %s", product_id, e)
+                    self.errors += 1
+                    offers = None
 
-                    try:
-                        reviews_total = self._get_reviews_total(item_id)
-                    except MLAuthError as e:
-                        self._sem_token(e)
-                        return
-                    except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
-                        # A falha de avaliações não invalida os outros dados do
-                        # anúncio, mas precisa tornar a coleta parcialmente falha.
-                        logger.warning("Falha ao buscar avaliações do item %s: %s", item_id, e)
-                        self.errors += 1
-                        reviews_total = None
+                yield dict(
+                    self._normalize_product(product, offers, cat),
+                    rank_position=posicao,
+                )
+                total_collected += 1
 
-                    yield dict(
-                        self._normalize_item(item),
-                        rank_position=posicoes[item_id],
-                        reviews_total=reviews_total,
-                    )
-                    total_collected += 1
-
-        logger.info(f"Coleta finalizada: {total_collected} items, {self.errors} erros")
+        logger.info(f"Coleta finalizada: {total_collected} produtos, {self.errors} erros")
 
     def _sem_token(self, e: MLAuthError) -> None:
         self.errors += 1
