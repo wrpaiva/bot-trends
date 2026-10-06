@@ -487,6 +487,13 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   falhar com `language override unsupported` — derrubou o backfill em produção e derrubaria a
   coleta. A v007 aponta o override para um campo que nunca é gravado. **O mongomock não
   reproduz isso**: teste de índice de texto vai em `test_search.py`, contra Mongo real.
+- **Recriar o beat atrasava toda task agendada pelo intervalo inteiro.** O `celerybeat-schedule`
+  ficava na camada do container: todo `up -d --build` o zerava, e o Celery conta o intervalo a
+  partir da subida — o `collect_ml` (6 h) ficava até 6 h sem rodar a cada deploy (visto em
+  2026-10-06). Agora vai no volume `trends_beat_data` (`--schedule /app/beat/...`), e o
+  Dockerfile cria `/app/beat` antes do `chown`: volume nomeado novo herda o dono do diretório
+  da imagem — sem ele nasce root e o beat não grava (o mesmo do backup, armadilha 8). Coberto
+  em `test_health.py`. Recriar o container sem o volume (ex.: `down -v`) volta a zerar.
 
 ---
 

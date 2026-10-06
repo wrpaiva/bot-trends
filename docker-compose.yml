@@ -181,7 +181,12 @@ services:
       - ./backend/.env
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
-    command: celery -A apps.worker.main.celery_app beat --loglevel=info
+    # Agendamento num volume: sem ele, recriar o container (todo deploy) zera o
+    # celerybeat-schedule e cada task só roda um intervalo inteiro depois da
+    # subida — o collect_ml (6 h) ficava 6 h parado a cada `up -d --build`.
+    command: celery -A apps.worker.main.celery_app beat --loglevel=info --schedule /app/beat/celerybeat-schedule
+    volumes:
+      - beat_data:/app/beat
     # O beat não serve HTTP nem responde a ping; o curl herdado da imagem o
     # marcava unhealthy à toa. Vivo = processo rodando (restart: unless-stopped).
     healthcheck:
@@ -371,6 +376,8 @@ volumes:
     name: trends_mongo_data
   redis_data:
     name: trends_redis_data
+  beat_data:
+    name: trends_beat_data
   prometheus_data:
     name: trends_prometheus_data
   grafana_data:
