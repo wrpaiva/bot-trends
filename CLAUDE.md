@@ -185,7 +185,7 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    rota de reviews responde (`/reviews/item` 403 no item, 404 no produto). **Por isso o
    collector parte do catálogo:** `source_product_id` é o id do **produto** (não do anúncio),
    preço = buy box ou menor oferta, `category` = categoria do ranking, `USER_PRODUCT` fica de
-   fora sem contar erro. Ainda não rodou contra o ML de verdade. O refresh token é de **uso único**: nunca renove
+   fora sem contar erro. Validado em 2026-10-06 com `MLB1051`: 18 produtos, 0 erros (2 `USER_PRODUCT` de fora). A menor oferta pode ser anúncio fora da curva (fone a R$ 10). O refresh token é de **uso único**: nunca renove
    fora de `MercadoLivreAuth` (ele grava o par novo com compare-and-set no Mongo, `ml_oauth`);
    um refresh "de teste" à mão invalida o token do worker.
 2. **`rank_momentum` e `reviews_velocity` só existem para item do ML** (TIE-16). A coleta grava
