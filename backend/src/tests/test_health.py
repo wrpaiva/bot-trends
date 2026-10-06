@@ -186,3 +186,24 @@ def test_healthchecks_do_compose():
     ), "api sem init: o healthcheck não consegue encerrá-la"
     # A readiness continua sendo a /health/ready (default do script)
     assert "/health/ready" in (RAIZ / "backend" / "apps" / "healthcheck" / "main.py").read_text()
+
+
+@pytest.mark.skipif(not (RAIZ / "docker-compose.yml").exists(), reason="compose fora do container")
+def test_agendamento_do_beat_sobrevive_a_recriar_o_container():
+    # Sem volume, recriar o beat (todo deploy) zera o celerybeat-schedule e o
+    # Celery conta o intervalo a partir da subida: o collect_ml (6 h) ficava 6 h
+    # sem rodar a cada `up -d --build` (2026-10-06).
+    yaml = pytest.importorskip("yaml")
+
+    compose = yaml.safe_load((RAIZ / "docker-compose.yml").read_text())
+    beat = compose["services"]["beat"]
+    montagens = {v.split(":")[1]: v.split(":")[0] for v in beat.get("volumes", [])}
+    assert "/app/beat" in montagens, "beat sem volume para o agendamento"
+    assert montagens["/app/beat"] in compose["volumes"], "precisa ser volume nomeado"
+    assert "--schedule /app/beat/celerybeat-schedule" in beat["command"]
+    # Volume nomeado novo copia dono e permissões do diretório da imagem: sem
+    # ele na imagem, nasce root e o beat (appuser) não grava (cf. backup, 2026-09-28)
+    dockerfile = (RAIZ / "backend" / "Dockerfile").read_text()
+    assert dockerfile.index("mkdir -p /app/beat") < dockerfile.index(
+        "chown -R appuser:appgroup /app"
+    )

@@ -37,8 +37,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar código fonte
 COPY . .
 
-# Ajustar permissões
-RUN chown -R appuser:appgroup /app
+# Ajustar permissões. /app/beat recebe o volume do agendamento do beat: o
+# Docker copia o dono deste diretório para o volume novo (sem ele, nasce root)
+RUN mkdir -p /app/beat && chown -R appuser:appgroup /app
 
 # Usar usuário não-root
 USER appuser
