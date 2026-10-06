@@ -298,7 +298,7 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   MLB (conferidos com a árvore real em 2026-10-06: os 7 existem, mesmo nome; `/sites/MLB/categories` exige Bearer e o fetch o manda), casa por `ml_category_id` (a árvore do ML não
   duplica o default) e grava `enabled`/`keywords`/`key` só no insert: **rodar o bootstrap de novo
   não desabilita o que o usuário habilitou**. `apps/tools/find_categories.py` foi removido —
-  era o mesmo que `GET /categories?query=` (TIE-20). Banco semeado antes da correção guarda as categorias antigas sem `ml_category_id` (no local: 5, de 2026-09-04): invisíveis e fora da coleta, mas a `key` delas colide com a do seed default — num banco sem a árvore do ML o seed default daria `DuplicateKeyError`.
+  era o mesmo que `GET /categories?query=` (TIE-20). Banco semeado antes da correção guarda as categorias antigas sem `ml_category_id` (no local eram 5, de 2026-09-04, apagadas em 2026-10-06): invisíveis e fora da coleta, mas a `key` delas colide com a do seed default — num banco sem a árvore do ML o seed default daria `DuplicateKeyError`.
 - **Datas naive (`datetime.utcnow()`).** Todas as datas agora são aware em UTC:
   `src/infrastructure/utils/datetime_utils.utcnow()` é o único jeito de pegar "agora", o
   `MongoClient` é criado com `tz_aware=True, tzinfo=UTC` (o que vem do banco também é aware) e
