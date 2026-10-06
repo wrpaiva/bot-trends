@@ -5,10 +5,12 @@ from typing import Any
 
 import httpx
 
+from src.infrastructure.collectors.ml_auth import MercadoLivreAuth, MLAuthError
 from src.infrastructure.config import settings
 from src.infrastructure.db.migrations import get_migrations
 from src.infrastructure.db.migrations.runner import MigrationRunner
 from src.infrastructure.db.mongo import get_db
+from src.infrastructure.logging_setup import http_log_hooks
 from src.infrastructure.utils.datetime_utils import utcnow
 
 
@@ -76,16 +78,29 @@ def default_seed() -> list[dict[str, Any]]:
     ]
 
 
-def fetch_ml_categories(site_id: str) -> list[dict[str, Any]]:
+def fetch_ml_categories(
+    site_id: str,
+    auth: MercadoLivreAuth,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> list[dict[str, Any]]:
     """
-    Busca as categorias do site do ML e transforma em docs para o Mongo.
-    Fonte: /sites/{site_id}/categories
+    Busca as categorias de primeiro nível do site do ML e transforma em docs
+    para o Mongo. Fonte: /sites/{site_id}/categories, que exige
+    `Authorization: Bearer` desde 2026-09 (TIE-41). Um 401 renova o token uma
+    vez (venceu entre a leitura e a chamada); MLAuthError sobe para o `main`.
     """
     base_url = settings.ML_BASE_URL.rstrip("/")
     url = f"{base_url}/sites/{site_id}/categories"
 
-    with httpx.Client(timeout=20) as client:
-        resp = client.get(url)
+    with httpx.Client(
+        timeout=20, transport=transport, event_hooks=http_log_hooks("mercadolivre")
+    ) as client:
+        token = auth.access_token()
+        resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
+        if resp.status_code == 401:
+            token = auth.refresh(stale=token)
+            resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
         resp.raise_for_status()
         raw = resp.json()
 
@@ -189,7 +204,16 @@ def main() -> int:
     site_id = settings.ML_SITE_ID
 
     if settings.BOOTSTRAP_FETCH_ML_CATEGORIES:
-        categories = fetch_ml_categories(site_id)
+        auth = None
+        try:
+            auth = MercadoLivreAuth.from_settings(db)
+            categories = fetch_ml_categories(site_id, auth)
+        except MLAuthError as e:
+            print(f"❌ árvore do ML sem token: {e}. Rode `python -m apps.ml_auth.main` antes.")
+            return 1
+        finally:
+            if auth is not None:
+                auth.close()
         inserted = seed_categories(db, categories)
         print(f"✅ seed categorias do ML ({site_id}): {inserted}")
         if settings.BOOTSTRAP_AUTO_ENABLE:

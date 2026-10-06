@@ -139,7 +139,8 @@ O par de tokens fica no Mongo (`ml_oauth`) e o worker o renova sozinho (o access
 
 O bootstrap é idempotente: rodar de novo atualiza nomes, mas não desabilita o que você
 habilitou nem duplica categorias. Para buscar a árvore real do ML (exige a autorização acima):
-`BOOTSTRAP_FETCH_ML_CATEGORIES=true docker compose run --rm api python -m apps.bootstrap.main`.
+`docker compose run --rm -e BOOTSTRAP_FETCH_ML_CATEGORIES=true api python -m apps.bootstrap.main`
+(com `-e`: a variável no shell do host não chega ao container, e o bootstrap cairia no seed default).
 
 **Escolhendo o que coletar.** Toda categoria nasce desabilitada — enquanto nada for habilitado,
 `collect_ml` devolve `{"status": "no enabled categories"}`. Cada categoria habilitada custa
