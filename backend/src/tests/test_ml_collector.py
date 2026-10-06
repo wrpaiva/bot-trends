@@ -1,6 +1,8 @@
 # src/tests/test_ml_collector.py
 """
-MercadoLivreCollector com o client HTTP mockado (TIE-17): erro permanente não é
+MercadoLivreCollector com o client HTTP mockado (TIE-17). Desde 2026-10 a
+coleta parte do catálogo (/highlights → /products), porque /items dá 403 a
+token de usuário comum. O client continua mockado: erro permanente não é
 retentado, erro transitório é, e uma categoria que falha não derruba as outras.
 """
 
@@ -16,48 +18,98 @@ def _collector(handler, categorias=("MLB1",)) -> MercadoLivreCollector:
         transport=httpx.MockTransport(handler),
         max_requests_per_minute=0,
     )
-    for fn in (c._get_highlights, c._get_items_batch, c._get_reviews_total):
+    for fn in (c._get_highlights, c._get_product, c._get_offers):
         fn.retry.sleep = lambda *_: None
     return c
 
 
-def _item(item_id: str) -> dict:
+def _produto(product_id: str) -> dict:
+    # Formato de /products/{id} com token de usuário comum (2026-10-06)
     return {
-        "code": 200,
-        "body": {
-            "id": item_id,
-            "title": f"Produto {item_id}",
-            "price": 10,
-            "sold_quantity": 7,
-        },
+        "id": product_id,
+        "name": f"Produto {product_id}",
+        "permalink": f"https://www.mercadolivre.com.br/p/{product_id}",
+        "domain_id": "MLB-CELLPHONES",
+        "buy_box_winner": None,
+        "attributes": [{"id": "BRAND", "value_name": "Samsung"}],
+    }
+
+
+def _ofertas(*precos: float) -> dict:
+    # Formato de /products/{id}/items: anúncios que vendem o produto
+    return {
+        "paging": {"total": len(precos), "offset": 0, "limit": 50},
+        "results": [
+            {"item_id": f"MLB9{i}", "price": p, "currency_id": "BRL", "category_id": "MLB1055"}
+            for i, p in enumerate(precos)
+        ],
     }
 
 
 def _handler_ok(request: httpx.Request) -> httpx.Response:
-    if "/highlights/" in request.url.path:
-        cat = request.url.path.rsplit("/", 1)[-1]
-        return httpx.Response(200, json={"content": [{"id": f"{cat}-A", "type": "ITEM"}]})
-    if "/reviews/item/" in request.url.path:
-        return httpx.Response(200, json={"paging": {"total": 12}})
-    ids = request.url.params["ids"].split(",")
-    return httpx.Response(200, json=[_item(i) for i in ids])
+    path = request.url.path
+    if "/highlights/" in path:
+        cat = path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json={"content": [{"id": f"{cat}-A", "type": "PRODUCT"}]})
+    if path.endswith("/items"):
+        return httpx.Response(200, json=_ofertas(1299.0, 1199.9))
+    return httpx.Response(200, json=_produto(path.rsplit("/", 1)[-1]))
 
 
-def test_coleta_normaliza_itens_sem_erros():
+def test_coleta_normaliza_produto_do_catalogo_sem_erros():
     with _collector(_handler_ok) as c:
         itens = list(c.collect())
-    assert [i["source_product_id"] for i in itens] == ["MLB1-A"]
-    assert itens[0]["reviews_total"] == 12
-    assert itens[0]["sold_quantity"] == 7
-    assert c.errors == 0
+
+    assert len(itens) == 1 and c.errors == 0
+    item = itens[0]
+    assert item["source"] == "mercadolivre"
+    assert item["source_product_id"] == item["canonical_id"] == "MLB1-A"
+    assert item["title"] == "Produto MLB1-A"
+    assert item["brand"] == "Samsung"
+    assert item["permalink"] == "https://www.mercadolivre.com.br/p/MLB1-A"
+    # Grupo do percentil = categoria do ranking, não a folha do anúncio
+    assert item["category"] == "MLB1"
+    assert item["rank_position"] == 1
 
 
-def test_falha_em_reviews_mantem_item_e_marca_coleta_parcial():
+def test_preco_eh_a_menor_oferta_e_ofertas_vao_para_marketplace():
+    with _collector(_handler_ok) as c:
+        item = next(iter(c.collect()))
+
+    assert item["price"] == 1199.9 and item["currency"] == "BRL"
+    assert item["marketplace"]["offers"] == 2
+    assert item["marketplace"]["domain_id"] == "MLB-CELLPHONES"
+
+
+def test_preco_do_buy_box_tem_prioridade_sobre_as_ofertas():
+    def handler(request):
+        if request.url.path.endswith("/MLB1-A"):
+            produto = _produto("MLB1-A")
+            produto["buy_box_winner"] = {"price": 1250.0, "currency_id": "BRL"}
+            return httpx.Response(200, json=produto)
+        return _handler_ok(request)
+
+    with _collector(handler) as c:
+        item = next(iter(c.collect()))
+
+    assert item["price"] == 1250.0
+
+
+def test_vendas_e_avaliacoes_ficam_sem_valor():
+    # /items e /reviews/item dão 403 a token comum: sem fonte, None (não 0)
+    with _collector(_handler_ok) as c:
+        item = next(iter(c.collect()))
+
+    assert item["sold_quantity"] is None
+    assert item.get("reviews_total") is None
+
+
+def test_falha_nas_ofertas_mantem_produto_sem_preco_e_marca_coleta_parcial():
     chamadas = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request):
         nonlocal chamadas
-        if "/reviews/item/" in request.url.path:
+        if request.url.path.endswith("/items"):
             chamadas += 1
             return httpx.Response(500, json={"message": "indisponível"})
         return _handler_ok(request)
@@ -65,38 +117,41 @@ def test_falha_em_reviews_mantem_item_e_marca_coleta_parcial():
     with _collector(handler) as c:
         itens = list(c.collect())
 
-    assert itens[0]["reviews_total"] is None
+    assert itens[0]["price"] is None and itens[0]["source_product_id"] == "MLB1-A"
     assert c.errors == 1
     assert chamadas == 3
 
 
-def test_total_de_reviews_ausente_vira_none_sem_invalidar_item():
-    def handler(request: httpx.Request) -> httpx.Response:
-        if "/reviews/item/" in request.url.path:
-            return httpx.Response(200, json={"paging": {}})
+def test_produto_sem_ofertas_fica_sem_preco_sem_erro():
+    def handler(request):
+        if request.url.path.endswith("/items"):
+            return httpx.Response(200, json=_ofertas())
         return _handler_ok(request)
 
     with _collector(handler) as c:
-        itens = list(c.collect())
+        item = next(iter(c.collect()))
 
-    assert itens[0]["reviews_total"] is None
+    assert item["price"] is None and item["marketplace"]["offers"] == 0
     assert c.errors == 0
 
 
-def test_total_de_reviews_invalido_mantem_item_e_marca_erro():
-    def handler(request: httpx.Request) -> httpx.Response:
-        if "/reviews/item/" in request.url.path:
-            return httpx.Response(200, json={"paging": {"total": "desconhecido"}})
+def test_falha_no_detalhe_do_produto_pula_o_produto_e_conta_erro():
+    def handler(request):
+        if "/highlights/" in request.url.path:
+            conteudo = [{"id": "P1", "type": "PRODUCT"}, {"id": "P2", "type": "PRODUCT"}]
+            return httpx.Response(200, json={"content": conteudo})
+        if request.url.path == "/products/P1":
+            return httpx.Response(404, json={"message": "not found"})
         return _handler_ok(request)
 
     with _collector(handler) as c:
         itens = list(c.collect())
 
-    assert itens[0]["reviews_total"] is None
+    assert [i["source_product_id"] for i in itens] == ["P2"]
     assert c.errors == 1
 
 
-def test_falha_de_token_ao_buscar_reviews_interrompe_coleta_com_motivo():
+def test_falha_de_token_no_meio_da_coleta_interrompe_com_motivo():
     class AuthFalhaNaTerceiraChamada(_AuthFalso):
         def __init__(self):
             super().__init__()
@@ -105,7 +160,7 @@ def test_falha_de_token_ao_buscar_reviews_interrompe_coleta_com_motivo():
         def access_token(self):
             self.chamadas += 1
             if self.chamadas == 3:
-                raise ml_mod.MLAuthError("token indisponível durante reviews")
+                raise ml_mod.MLAuthError("token indisponível durante as ofertas")
             return super().access_token()
 
     auth = AuthFalhaNaTerceiraChamada()
@@ -113,7 +168,7 @@ def test_falha_de_token_ao_buscar_reviews_interrompe_coleta_com_motivo():
         assert list(c.collect()) == []
 
     assert c.errors == 1
-    assert c.auth_error == "token indisponível durante reviews"
+    assert c.auth_error == "token indisponível durante as ofertas"
 
 
 def test_categoria_com_401_nao_eh_retentada_e_nao_derruba_as_outras():
@@ -248,21 +303,19 @@ def test_sem_token_a_coleta_para_e_diz_o_motivo():
     assert "nenhum token" in c.auth_error
 
 
-def test_item_leva_a_posicao_e_ordem_do_highlights_da_categoria():
-    # TIE-14: /items pode devolver outra ordem; o ranking é relativo a cada
-    # categoria e precisa preservar a ordem/posição de /highlights.
+def test_produto_leva_a_posicao_do_highlights_e_ignora_o_que_nao_e_catalogo():
+    # TIE-14: posição relativa à categoria, na ordem de /highlights. Desde 2026-10
+    # o highlight só traz PRODUCT/USER_PRODUCT; USER_PRODUCT dá 403 em
+    # /user-products a token comum, então fica de fora (sem contar erro).
     def handler(request: httpx.Request) -> httpx.Response:
-        if "/reviews/item/" in request.url.path:
-            return httpx.Response(200, json={"paging": {"total": 2}})
         if "/highlights/" in request.url.path:
             conteudo = [
-                {"id": "B", "type": "ITEM", "position": 7},
-                {"id": "X", "type": "PRODUCT", "position": 8},
-                {"id": "C", "type": "ITEM"},
+                {"id": "B", "type": "PRODUCT", "position": 7},
+                {"id": "MLBU1", "type": "USER_PRODUCT", "position": 8},
+                {"id": "C", "type": "PRODUCT"},
             ]
             return httpx.Response(200, json={"content": conteudo})
-        ids = request.url.params["ids"].split(",")
-        return httpx.Response(200, json=[_item(i) for i in reversed(ids)])
+        return _handler_ok(request)
 
     with _collector(handler) as c:
         itens = list(c.collect())
@@ -271,3 +324,17 @@ def test_item_leva_a_posicao_e_ordem_do_highlights_da_categoria():
         ("B", 7),
         ("C", 3),
     ]
+    assert c.errors == 0
+
+
+def test_respeita_o_maximo_de_produtos_por_categoria():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/highlights/" in request.url.path:
+            conteudo = [{"id": f"P{n}", "type": "PRODUCT"} for n in range(5)]
+            return httpx.Response(200, json={"content": conteudo})
+        return _handler_ok(request)
+
+    c = _collector(handler)
+    c.max_items_per_category = 2
+    with c:
+        assert [i["source_product_id"] for i in c.collect()] == ["P0", "P1"]
