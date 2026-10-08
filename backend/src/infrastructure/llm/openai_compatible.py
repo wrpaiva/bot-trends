@@ -26,7 +26,12 @@ class OpenAICompatibleLLMClient(LLMClient):
       LLM_MODEL (default definido em config.py)
     """
 
-    def __init__(self, timeout_s: int = 25, transport: httpx.BaseTransport | None = None):
+    def __init__(
+        self,
+        timeout_s: int = 25,
+        transport: httpx.BaseTransport | None = None,
+        temperature: float = 0.2,
+    ):
         base = settings.LLM_BASE_URL
         key = settings.LLM_API_KEY
         if not base or not key:
@@ -35,6 +40,8 @@ class OpenAICompatibleLLMClient(LLMClient):
         self.base_url = base.rstrip("/")
         self.api_key = key
         self.model = settings.LLM_MODEL
+        # 0.2 na análise; a avaliação do prompt (TIE-26) compara outras
+        self.temperature = temperature
         self.client = httpx.Client(
             timeout=timeout_s,
             transport=transport,  # injetável nos testes
@@ -50,7 +57,7 @@ class OpenAICompatibleLLMClient(LLMClient):
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
-            "temperature": 0.2,
+            "temperature": self.temperature,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},

@@ -74,3 +74,6 @@ Thumbs.db
 
 # Backups do Mongo (TIE-35): dados de produção, nunca no git
 /backups/
+
+# Rótulos humanos da avaliação do prompt (TIE-26) — dado local, não vai para o git
+avaliacao/

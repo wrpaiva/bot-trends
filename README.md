@@ -304,6 +304,32 @@ com cache, cada produto só chama o LLM quando o TikTok traz métricas novas (a 
 `TIKTOK_INTERVAL_MIN`, 120 min → ≤ 12/dia) ou o TTL vence (4/dia se parado) — **teto de ~600/dia,
 −75%**. A taxa real sai no log `llm.cache` e no retorno da task (`llm_cache_hits`/`misses`).
 
+### Avaliação do prompt (TIE-26)
+
+`apps.prompt_eval` mede o prompt com dados reais; rode antes e depois de mexer nele.
+
+```bash
+# 1) CSV CEGO (sem a resposta do modelo) com os vídeos analisados pelas versões pedidas
+docker compose run --rm -v "$PWD/avaliacao:/out" api python -m apps.prompt_eval.main exportar --saida /out/rotulos.csv
+# 2) rotule: classificacao_humana (ESTAVEL, SUBINDO, VIRALIZANDO, PICO_TEMPORARIO, EM_QUEDA) e score_humano (0–100)
+# 3) concordância de cada versão com você: acerto, kappa de Cohen, Spearman do score (LLM e numérico)
+docker compose run --rm -v "$PWD/avaliacao:/out" api python -m apps.prompt_eval.main concordancia --rotulos /out/rotulos.csv
+# 4) estabilidade por temperatura (CUSTA chamadas ao LLM; teto em --max-chamadas)
+docker compose run --rm api python -m apps.prompt_eval.main estabilidade --temperaturas 0,0.2,0.7 --repeticoes 3
+```
+
+**Temperatura e formato revisados (2026-10-05, `gpt-4.1-mini`, prompt v4, 20 vídeos × 3 repetições):**
+
+| Temperatura | Respostas válidas | Desvio do score entre repetições | Classificação igual entre repetições |
+|---|---|---|---|
+| 0 | 60/60 | ±1,3 | 98% |
+| **0,2** (em uso) | 60/60 | ±1,3 | 98% |
+| 0,7 | 60/60 | ±2,5 | 98% |
+
+Fica 0,2: tão estável quanto 0, e 0,7 dobra a variação sem ganho. O formato (`json_object` +
+schema) não falhou em 180 chamadas. Nem a 0 é determinística (±1,3). A pasta `avaliacao/` está no
+`.gitignore`.
+
 ### Score final
 
 ```

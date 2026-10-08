@@ -137,3 +137,18 @@ def test_toda_chamada_real_e_contada_pelo_resultado(contadas):
         _client(timeout).analyze_trend("s", "u")
 
     assert contadas == ["ok", "http_429", "resposta_invalida", "erro_rede"]
+
+
+def test_temperatura_configuravel_vai_no_payload():
+    # TIE-26: a avaliação do prompt compara temperaturas; o default segue 0.2
+    enviados = []
+
+    def handler(request):
+        enviados.append(json.loads(request.content)["temperature"])
+        return _completion(json.dumps(RESPOSTA))
+
+    _client(handler).analyze_trend("s", "u")
+    OpenAICompatibleLLMClient(
+        transport=httpx.MockTransport(handler), temperature=0.0
+    ).analyze_trend("s", "u")
+    assert enviados == [0.2, 0.0]
