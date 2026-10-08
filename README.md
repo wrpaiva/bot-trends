@@ -99,9 +99,14 @@ A lista completa, com defaults, está em `backend/src/infrastructure/config.py`.
 ### 2️⃣ Subir
 
 ```bash
-docker compose up -d --build              # produção
-docker compose --profile dev up           # + dashboard em hot-reload
+docker compose build && docker compose up -d     # produção
+docker compose --profile dev up                  # + dashboard em hot-reload
 ```
+
+Para atualizar, também `build` e depois `up -d`, não `up -d --build`: no Compose 2.37.1 (o do
+Ubuntu 24.04), o `up -d --build` constrói a imagem nova e **deixa o container antigo rodando**
+(visto em 2026-10-08). Na dúvida, compare `docker inspect -f '{{.Image}}' trends_api` com
+`docker image inspect -f '{{.Id}}' bot-trends-api`.
 
 Portas ocupadas por outro projeto? Troque `API_HOST_PORT`, `WEB_HOST_PORT`, `MONGO_HOST_PORT`,
 `REDIS_HOST_PORT` e `WEB_DEV_HOST_PORT` no `.env` da raiz. Mongo e Redis só escutam em `127.0.0.1`.
@@ -175,9 +180,38 @@ healthcheck da `api` (`apps/healthcheck/main.py`, TIE-38) distingue os dois caso
 Para isso a `api` roda com `init: true`: dentro do container o PID 1 ignora SIGKILL vindo de
 dentro, então a API tem de ser filha do init (tini). Nada recebe acesso ao `docker.sock`.
 
+### 5️⃣ Da coleta ao ranking na tela
+
+O beat coleta e analisa sozinho (ver "Agendamento"), mas a primeira coleta do ML só vem 6 h
+depois da subida. Para ver o fluxo inteiro na hora, dispare as tasks pelo próprio worker:
+
+```bash
+# Coleta do ML nas categorias habilitadas → {'status': 'ok', 'inserted': N, 'errors': 0}
+docker compose exec worker python -c "from apps.worker.main import celery_app as a; \
+  print(a.send_task('tasks.collect_ml').get(timeout=300))"
+
+# Análise (janela de 72 h, como o beat) → {'status': 'ok', 'processed': N, ...}
+docker compose exec worker python -c "from apps.worker.main import celery_app as a; \
+  print(a.send_task('tasks.hybrid_trend_analyze').get(timeout=540))"
+
+curl -H "X-API-Key: $API_KEY" "http://localhost:8000/rankings/latest?limit=5"   # count > 0
+```
+
+E então o dashboard (`http://localhost`, porta `WEB_HOST_PORT`) mostra o ranking. Validado de ponta
+a ponta em 2026-10-08 (TIE-5): `MLB1051` + `MLB1000` habilitadas → 34 leituras, 0 erros → 33
+produtos analisados → 33 no ranking e na tela. O que esperar hoje:
+
+- **Só produtos do ML.** A coleta do TikTok depende de crédito na Apify; sem ele, o breaker
+  `apify` aparece aberto no `/health/ready`, e vídeos com métricas de mais de 72 h saem da janela.
+- **Tudo `ESTAVEL`, score final entre 40 e 45, nenhum alerta** (limiar 60). Item do ML ainda não
+  tem vendas nem avaliações (o ML as nega a token comum), o `rank_momentum` só pontua quando o
+  produto sobe no ranking, e o LLM ainda não recebe os sinais do marketplace.
+- A análise do beat pode coincidir com a manual: o ranking mostra só o insight mais recente de
+  cada produto, então não duplica.
+
 ---
 
-### 5️⃣ Produção
+### 6️⃣ Produção
 
 Em VPS, com HTTPS (renovação automática) e login na frente do dashboard e do `/api`:
 **[docs/DEPLOY.md](docs/DEPLOY.md)** — `docker-compose.prod.yml` (só o Caddy publicado no host)

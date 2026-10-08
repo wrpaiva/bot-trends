@@ -78,7 +78,7 @@ tenta expandir cada `$` do hash como variável e o login nunca bate.
 
 ```bash
 mkdir -p backups                       # antes do 1º up: senão o Docker cria como root (armadilha 8)
-docker compose up -d --build           # com COMPOSE_FILE no .env, já é o de produção
+docker compose build && docker compose up -d   # com COMPOSE_FILE no .env, já é o de produção
 docker compose run --rm api python -m apps.migrate.main
 docker compose run --rm api python -m apps.bootstrap.main
 ```
@@ -114,11 +114,14 @@ ssh -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 vps                 # no seu c
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose build && docker compose up -d   # não `up -d --build`: ver nota abaixo
 docker compose run --rm api python -m apps.migrate.main     # idempotente; só aplica as novas
 ```
 
-Para voltar a uma versão anterior: `git checkout <commit>` e `docker compose up -d --build`.
+Para voltar a uma versão anterior: `git checkout <commit>`, `docker compose build` e `docker compose up -d`.
+`up -d --build` num comando só não serve: no Compose 2.37.1 (Ubuntu 24.04) ele constrói a imagem
+nova e mantém o container antigo rodando (2026-10-08). Confira com
+`docker inspect -f '{{.Image}}' trends_api` contra `docker image inspect -f '{{.Id}}' bot-trends-api`.
 **Migrações não têm rollback** (só andam para frente): se a versão nova migrou o banco, restaure
 o backup (`infra/backup/`, seção "Backup e restauração" do README) em vez de só trocar o código.
 

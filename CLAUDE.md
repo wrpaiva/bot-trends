@@ -36,7 +36,7 @@ declare a interface em `src/domain/interfaces.py` e implemente em `infrastructur
 
 Rodar tudo:
 ```bash
-docker compose up -d --build              # produção
+docker compose build && docker compose up -d   # produção (não `up -d --build`: armadilha 9)
 docker compose --profile dev up           # com frontend em hot-reload (:5173)
 docker compose logs -f worker
 ```
@@ -92,7 +92,8 @@ avisa; olhe o Spearman. Mexeu no motor? Rode antes e depois.
 
 Produção (VPS, TLS + basic auth no Caddy — procedimento em `docs/DEPLOY.md`):
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 # na VPS, COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml no .env dispensa os -f
 ```
 O override zera as portas herdadas com `!reset []` (Compose ≥ 2.24): **serviço novo que publica
@@ -238,7 +239,7 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    `TIKTOK_RESULTS_PER_HASHTAG` (default 10) e `TIKTOK_INTERVAL_MIN` (default 120). Antes
    disso eram 50 vídeos a cada 30 min, e uma noite consumiu US$ 3,55 dos US$ 5 do plano
    gratuito. Ao mexer em `main.py`, confira o agendamento **dentro** do container do beat —
-   já aconteceu de ele continuar com a imagem antiga depois de um `up -d --build`.
+   já aconteceu de ele continuar com a imagem antiga depois de um `up -d --build` (armadilha 9).
 8. **O backup não roda se o Docker criar `./backups`.** Sem a pasta no host, o Docker cria o
    bind mount como `root`, e o serviço `backup` roda como `BACKUP_UID` (1000): todo ciclo falha
    com `permission denied` no `mongodump`. Aconteceu em 2026-09-28 e passou 3 dias sem ninguém
@@ -247,6 +248,17 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    `docker run --rm -v "$PWD/backups:/b" mongo:7 chown 1000:1000 /b` e rode um ciclo com
    `docker compose exec backup bash /backup/backup.sh`. Corrigido assim em 2026-10-01 (dump de
    11.505 documentos, `restore_test.sh` com todas as contagens batendo).
+9. **`docker compose up -d --build` não recria os containers.** No Compose 2.37.1 (pacote do
+   Ubuntu 24.04) ele constrói a imagem nova e responde `Running` para os containers antigos —
+   a stack segue com o código anterior, sem erro nenhum. Reproduzido em 2026-10-08 (TIE-5): um
+   arquivo novo em `backend/src/` entrou na imagem e não apareceu no container; um `up -d` logo
+   depois recriou. Use `docker compose build && docker compose up -d`, e confira
+   `docker inspect -f '{{.Image}}' trends_api` contra `docker image inspect -f '{{.Id}}' bot-trends-api`.
+10. **O LLM não vê nada de produto do Mercado Livre.** O prompt (`build_trend_prompt`) manda
+   sinais de vídeo, preço e `sold_quantity`, mas não `rank_position`, `rank_momentum` nem a
+   fonte. Em item do ML tudo isso é zero ou `None`, e o modelo responde 20 ou 40 sempre ("sem
+   dados de views/hora") — visto nos 33 produtos do ML em 2026-10-08. Enquanto não mudar, os 40%
+   do LLM no score final do ML são constantes: a ordem vem toda do numérico.
 
 ## Já corrigido (não reintroduzir)
 

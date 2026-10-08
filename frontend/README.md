@@ -23,7 +23,7 @@ uma chave-canário no ambiente e falha se ela aparecer no `dist`.
 ## Rodando
 
 ```bash
-docker compose up -d --build web          # nginx, porta WEB_HOST_PORT (default 80)
+docker compose build web && docker compose up -d web   # nginx, porta WEB_HOST_PORT (default 80)
 docker compose --profile dev up           # hot-reload, porta WEB_DEV_HOST_PORT (default 5173)
 ```
 
