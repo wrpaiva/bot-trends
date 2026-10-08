@@ -44,6 +44,14 @@ class TrendInput:
     commercial_marker: str | None = None
     n_readings: int | None = None
 
+    # TIE-42: contexto de marketplace para o LLM. Item do ML não tem sinal
+    # social; o que ele tem é a posição no ranking de mais vendidos (1 = topo),
+    # na leitura mais recente e na mais antiga da janela. Com as duas o LLM vê
+    # também a queda, que o rank_momentum (só subida) não mostra.
+    source: str | None = None
+    rank_position: int | None = None
+    rank_position_start: int | None = None
+
 
 @dataclass(frozen=True)
 class NumericScoreResult:

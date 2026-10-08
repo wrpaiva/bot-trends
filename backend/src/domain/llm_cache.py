@@ -19,7 +19,7 @@ import json
 from .trend_models import TrendInput
 
 # Suba quando o prompt ou o schema de resposta mudar: invalida o cache inteiro
-PROMPT_VERSION = "v4"  # v4: sem score pronto, few-shot, referência do grupo (TIE-26)
+PROMPT_VERSION = "v5"  # v5: item do ML com ranking e sem sinais sociais zerados (TIE-42)
 
 # Casas decimais nos floats: ruído de ponto flutuante não pode virar miss
 _CASAS = 4
@@ -50,6 +50,9 @@ def llm_cache_key(ti: TrendInput) -> str:
         "has_shop_product": ti.has_shop_product,
         "commercial_marker": ti.commercial_marker,
         "n_readings": ti.n_readings,
+        "source": ti.source,
+        "rank_position": ti.rank_position,
+        "rank_position_start": ti.rank_position_start,
     }
     bruto = json.dumps(entrada, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(bruto.encode()).hexdigest()

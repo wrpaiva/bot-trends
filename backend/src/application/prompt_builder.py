@@ -20,7 +20,8 @@ from typing import Any
 from src.domain.percentile import Normalization
 from src.domain.trend_models import TrendInput
 
-# Exemplos sintéticos: um por classificação, mais o caso "novo sem tração". Respeitam o que os sinais
+# Exemplos sintéticos de vídeo: um por classificação, mais o caso "novo sem tração"; depois, os
+# de item do marketplace (TIE-42). Respeitam o que os sinais
 # conseguem medir: social_velocity nunca é negativo (desaceleração aparece
 # como 0 com 2+ leituras), e com leitura única ele vale 0 sem dizer nada.
 _REF = {
@@ -164,6 +165,104 @@ FEW_SHOT: list[dict[str, Any]] = [
             "confidence_0_1": 0.75,
         },
     },
+    # TIE-42: item do ML. Sem vídeo (social e referência null); o sinal é o
+    # ranking de mais vendidos. rank_momentum = log(início/agora)/log(20), e
+    # vale 0 na queda — por isso a queda só aparece comparando as posições.
+    {
+        "entrada": {
+            "produto": {"fonte": "mercadolivre"},
+            "marketplace": {
+                "posicao_ranking": 4,
+                "posicao_ranking_inicio_janela": 17,
+                "rank_momentum": 0.48,
+                "leituras": 4,
+                "price": 59.9,
+            },
+            "social": None,
+            "referencia": None,
+        },
+        "saida": {
+            "trend_classification": "SUBINDO",
+            "potential_score_0_100": 70,
+            "risk_level": "MEDIO",
+            "analysis": "Subiu de 17º para 4º no ranking de mais vendidos da categoria "
+            "em 4 leituras: a demanda cresce rápido, mas ainda não chegou ao topo.",
+            "recommendation": "Cotar fornecedor e testar estoque pequeno; se passar ao "
+            "top 3 na próxima leitura, a tendência se confirma.",
+            "confidence_0_1": 0.65,
+        },
+    },
+    {
+        "entrada": {
+            "produto": {"fonte": "mercadolivre"},
+            "marketplace": {
+                "posicao_ranking": 1,
+                "posicao_ranking_inicio_janela": 1,
+                "rank_momentum": 0.0,
+                "leituras": 6,
+                "price": 249.0,
+            },
+            "social": None,
+            "referencia": None,
+        },
+        "saida": {
+            "trend_classification": "ESTAVEL",
+            "potential_score_0_100": 45,
+            "risk_level": "BAIXO",
+            "analysis": "Mais vendido da categoria nas 6 leituras: demanda alta e "
+            "consolidada, mas sem movimento — já é mainstream, não tendência nova.",
+            "recommendation": "Serve como produto de catálogo, com concorrência forte; "
+            "não é aposta antecipada.",
+            "confidence_0_1": 0.75,
+        },
+    },
+    {
+        "entrada": {
+            "produto": {"fonte": "mercadolivre"},
+            "marketplace": {
+                "posicao_ranking": 14,
+                "posicao_ranking_inicio_janela": 2,
+                "rank_momentum": 0.0,
+                "leituras": 5,
+                "price": 89.9,
+            },
+            "social": None,
+            "referencia": None,
+        },
+        "saida": {
+            "trend_classification": "EM_QUEDA",
+            "potential_score_0_100": 20,
+            "risk_level": "ALTO",
+            "analysis": "Caiu de 2º para 14º no ranking em 5 leituras: a demanda que "
+            "existia está passando para outros produtos.",
+            "recommendation": "Evitar estoque novo; se já tem, girar o que sobrou antes "
+            "que caia mais.",
+            "confidence_0_1": 0.7,
+        },
+    },
+    {
+        "entrada": {
+            "produto": {"fonte": "mercadolivre"},
+            "marketplace": {
+                "posicao_ranking": 6,
+                "posicao_ranking_inicio_janela": 6,
+                "rank_momentum": 0.0,
+                "leituras": 1,
+                "price": 34.9,
+            },
+            "social": None,
+            "referencia": None,
+        },
+        "saida": {
+            "trend_classification": "ESTAVEL",
+            "potential_score_0_100": 45,
+            "risk_level": "MEDIO",
+            "analysis": "6º no ranking em leitura única: entre os mais vendidos, mas "
+            "ainda não dá para dizer se sobe ou cai.",
+            "recommendation": "Acompanhar as próximas leituras antes de decidir.",
+            "confidence_0_1": 0.4,
+        },
+    },
 ]
 
 
@@ -196,6 +295,19 @@ SYSTEM = (
     "- potential_score_0_100 é a SUA estimativa de potencial, a partir dos sinais. "
     "Use a escala inteira: ESTAVEL fica perto de 40, VIRALIZANDO acima de 80.\n"
     "- Não invente dados. Cite números dos sinais na análise.\n\n"
+    "Item de marketplace (fonte mercadolivre) não é vídeo: social e referencia vêm "
+    "null — não fale de views, engajamento nem de falta de tração social. O sinal "
+    "é o ranking de mais vendidos da categoria (cerca de 20 posições, 1 = o mais "
+    "vendido):\n"
+    "- posicao_ranking é a posição agora; posicao_ranking_inicio_janela, a da "
+    "leitura mais antiga da janela. Número menor = subiu = demanda crescendo; "
+    "número maior = caiu = demanda esfriando.\n"
+    "- rank_momentum (0 a 1) mede só subida, em escala log (20º → 1º = 1). Queda "
+    "aparece como 0: compare as duas posições.\n"
+    "- Com leituras = 1, ou posições iguais, não houve tempo para medir: reduza a "
+    "confiança.\n"
+    "- No topo e parado é demanda alta já consolidada: ESTAVEL, não tendência nova.\n"
+    "- sold_quantity null é falta de dado, não de vendas: não conclua nada dele.\n\n"
     f"Exemplos:\n\n{_exemplos()}"
 )
 
@@ -211,20 +323,35 @@ def _referencia(norm: Normalization | None) -> dict[str, Any] | None:
     }
 
 
+MARKETPLACES = frozenset({"mercadolivre"})
+
+
 def build_trend_prompt(ti: TrendInput, normalization: Normalization | None) -> dict[str, Any]:
-    data = {
-        "produto": {
-            "title": ti.title,
-            "category": ti.category,
+    produto: dict[str, Any] = {"title": ti.title, "category": ti.category, "fonte": ti.source}
+    marketplace: dict[str, Any] = {
+        "price": ti.price,
+        "sold_quantity": ti.sold_quantity,
+        "price_volatility": ti.price_volatility,
+    }
+
+    if ti.source in MARKETPLACES:
+        # TIE-42: sem vídeo, os sinais sociais e a referência (views, engajamento)
+        # são zeros que o LLM lia como "sem tração". O sinal é o ranking.
+        marketplace |= {
+            "posicao_ranking": ti.rank_position,
+            "posicao_ranking_inicio_janela": ti.rank_position_start,
+            "rank_momentum": ti.rank_momentum,
+            "leituras": ti.n_readings,
+        }
+        social = None
+        referencia = None
+    else:
+        # Vídeo (ou produto gravado antes do campo `source`, quando só havia TikTok)
+        produto |= {
             "marcador_comercial": ti.commercial_marker,
             "has_shop_product": ti.has_shop_product,
-        },
-        "marketplace": {
-            "price": ti.price,
-            "sold_quantity": ti.sold_quantity,
-            "price_volatility": ti.price_volatility,
-        },
-        "social": {
+        }
+        social = {
             "age_hours": ti.age_hours,
             "views_per_hour": ti.views_per_hour,
             "engagement_per_hour": ti.engagement_per_hour,
@@ -232,8 +359,14 @@ def build_trend_prompt(ti: TrendInput, normalization: Normalization | None) -> d
             "leituras": ti.n_readings,
             "views_total": ti.views_24h,
             "engagement_total": ti.engagement_24h,
-        },
-        "referencia": _referencia(normalization),
+        }
+        referencia = _referencia(normalization)
+
+    data = {
+        "produto": produto,
+        "marketplace": marketplace,
+        "social": social,
+        "referencia": referencia,
     }
 
     user = (

@@ -396,6 +396,32 @@ def test_rank_momentum_vem_das_posicoes_do_ml(db):
     assert nm_rank == {"ml1": pytest.approx(1.0), "p1": 0.0, "p2": 0.0}
 
 
+def test_posicao_no_ranking_e_fonte_chegam_ao_prompt(db):
+    # TIE-42: o LLM via só zeros no item do ML. Agora recebe a fonte, a posição
+    # atual e a do início da janela — inclusive quando caiu, que o
+    # rank_momentum (só subida) não mostra
+    agora = utcnow()
+    db["products"].insert_one({"product_id": "ml1", "title": "Air fryer", "source": "mercadolivre"})
+    for horas, pos in ((30, 3), (18, None), (6, 12)):
+        db["metrics"].insert_one(
+            {
+                "product_id": "ml1",
+                "ts": agora - dt.timedelta(hours=horas),
+                "source": "mercadolivre",
+                "rank_position": pos,
+                "price": 300.0,
+            }
+        )
+
+    mod.hybrid_trend_analyze(hours=72)
+
+    prompt_ml = next(p for p in _LLM.prompts if "Air fryer" in p)
+    assert '"fonte": "mercadolivre"' in prompt_ml
+    assert '"posicao_ranking": 12' in prompt_ml
+    assert '"posicao_ranking_inicio_janela": 3' in prompt_ml
+    assert '"social": null' in prompt_ml
+
+
 def test_reviews_velocity_e_vendas_vem_da_coleta_do_ml(db):
     # TIE-16: 10 → 40 avaliações em 24 h = 30/dia. Com 3 produtos (< 5) o
     # scoring usa a faixa absoluta 0–50/dia → 0,6; o TikTok continua 0.

@@ -203,9 +203,9 @@ produtos analisados → 33 no ranking e na tela. O que esperar hoje:
 
 - **Só produtos do ML.** A coleta do TikTok depende de crédito na Apify; sem ele, o breaker
   `apify` aparece aberto no `/health/ready`, e vídeos com métricas de mais de 72 h saem da janela.
-- **Tudo `ESTAVEL`, score final entre 40 e 45, nenhum alerta** (limiar 60). Item do ML ainda não
-  tem vendas nem avaliações (o ML as nega a token comum), o `rank_momentum` só pontua quando o
-  produto sobe no ranking, e o LLM ainda não recebe os sinais do marketplace.
+- **Quase tudo `ESTAVEL`, score final entre 38 e 54, nenhum alerta** (limiar 60; medido com o
+  prompt v5 em 2026-10-08). Item do ML ainda não tem vendas nem avaliações (o ML as nega a token
+  comum), e o `rank_momentum` só pontua quando o produto sobe no ranking.
 - A análise do beat pode coincidir com a manual: o ranking mostra só o insight mais recente de
   cada produto, então não duplica.
 
@@ -330,6 +330,22 @@ fora do domínio é rejeitado, score fora da faixa é ajustado para 0–100.
 com ele no prompt, o modelo copiava a nota e o `llm_score` ficava a ±0,4 do numérico. Traz um
 exemplo few-shot por classificação e fala com quem decide se aposta no produto, não com quem
 postou o vídeo. Cada insight grava a versão do prompt em `prompt_version` (`null` no fallback).
+
+**Item do Mercado Livre (prompt v5, TIE-42).** Produto de marketplace não tem vídeo: o prompt
+manda `social` e `referencia` como `null` e, no lugar, a fonte, a posição no ranking de mais
+vendidos agora e no início da janela, o `rank_momentum` e o nº de leituras, com exemplos de item
+subindo, parado no topo, caindo e em leitura única. Na v4 ele recebia sinais sociais zerados e
+respondia "sem tração social" em tudo. Com os produtos reais do ML (2026-10-08):
+
+| | v4 (340 insights) | v5 (50 insights) |
+|---|---|---|
+| Valores distintos de `llm_score` | 2 (20 ou 40) | 6 (25 a 65) |
+| Classificações | só `ESTAVEL` | `ESTAVEL` 48, `SUBINDO` 1, `EM_QUEDA` 1 |
+| Análises que citam views/engajamento/tração | quase todas | 0 |
+
+O `SUBINDO` é um carregador que foi de 11º a 7º; o `EM_QUEDA`, um fone que caiu de 13º para 15º.
+Produto que está no ranking de duas categorias mistura as posições numa série só (5 de 94 em
+2026-10-08): a leitura não diz de qual categoria é.
 
 **Cache.** A análise do LLM é reaproveitada enquanto as métricas de entrada do produto não
 mudam, por até `LLM_CACHE_TTL_HOURS` (default 6; `0` desliga), no Redis. O score numérico é
