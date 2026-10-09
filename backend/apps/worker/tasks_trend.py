@@ -191,6 +191,7 @@ def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | N
                     },
                 )
 
+    posicoes = [m["rank_position"] for m in metrics if m.get("rank_position")]
     ti = TrendInput(
         product_id=product_id,
         title=product.get("title"),
@@ -214,6 +215,10 @@ def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | N
         has_shop_product=bool(product.get("has_shop_product")),
         commercial_marker=marcador,
         n_readings=len(metrics),
+        # TIE-42: `metrics` vem da mais recente para a mais antiga
+        source=product.get("source"),
+        rank_position=posicoes[0] if posicoes else None,
+        rank_position_start=posicoes[-1] if posicoes else None,
     )
     return ti, sources, sinais, marcador
 

@@ -146,8 +146,12 @@ def test_exemplos_vao_no_prompt():
         assert json.dumps(ex["saida"], ensure_ascii=False) in prompt["system"]
 
 
+def _videos():
+    return [ex for ex in FEW_SHOT if ex["entrada"].get("social")]
+
+
 def _exemplos(classe):
-    return [ex for ex in FEW_SHOT if ex["saida"]["trend_classification"] == classe]
+    return [ex for ex in _videos() if ex["saida"]["trend_classification"] == classe]
 
 
 def test_exemplo_de_queda_eh_de_video_que_ja_teve_tempo_de_perder_atencao():
@@ -161,6 +165,103 @@ def test_ha_exemplo_de_video_novo_sem_tracao_que_nao_eh_queda():
         s, ref = ex["entrada"]["social"], ex["entrada"]["referencia"]
         return s["age_hours"] < 48 and s["views_per_hour"] < ref["views_per_hour"]["mediana"]
 
-    novos = [ex for ex in FEW_SHOT if sem_tracao_e_novo(ex)]
+    novos = [ex for ex in _videos() if sem_tracao_e_novo(ex)]
     assert novos, "falta exemplo de vídeo novo sem tração"
     assert {ex["saida"]["trend_classification"] for ex in novos} == {"ESTAVEL"}
+
+
+# --- Item do marketplace (TIE-42) -----------------------------------------------
+# Em 2026-10-08 os 33 produtos do ML receberam llm_score 20 ou 40, sempre: o
+# prompt mandava o bloco social e a referência do grupo zerados, e nada do
+# ranking. O modelo respondia "sem dados de views/hora" em todos.
+
+_ML = {
+    "title": "Kit 10 Potes Herméticos",
+    "category": "MLB1618",
+    "price": 59.9,
+    "views_24h": 0,
+    "engagement_24h": 0,
+    "social_velocity": 0.0,
+    "age_hours": None,
+    "views_per_hour": None,
+    "engagement_per_hour": None,
+    "commercial_marker": None,
+    "n_readings": 4,
+    "source": "mercadolivre",
+    "rank_position": 4,
+    "rank_position_start": 17,
+    "rank_momentum": 0.48,
+}
+
+
+def _ml(**kw):
+    return _ti(**{**_ML, **kw})
+
+
+def test_prompt_diz_a_fonte_do_produto():
+    assert _dados(build_trend_prompt(_ml(), _norm()))["produto"]["fonte"] == "mercadolivre"
+    assert _dados(build_trend_prompt(_ti(source="tiktok"), _norm()))["produto"]["fonte"] == "tiktok"
+
+
+def test_item_do_ml_manda_a_posicao_no_ranking():
+    mkt = _dados(build_trend_prompt(_ml(), _norm()))["marketplace"]
+    assert mkt["posicao_ranking"] == 4
+    assert mkt["posicao_ranking_inicio_janela"] == 17
+    assert mkt["rank_momentum"] == 0.48
+    assert mkt["leituras"] == 4
+    assert mkt["price"] == 59.9
+
+
+def test_item_do_ml_nao_manda_sinais_sociais_zerados():
+    # Zeros de um vídeo que não existe viravam "sem tração social"
+    dados = _dados(build_trend_prompt(_ml(), _norm()))
+    assert dados["social"] is None
+    assert dados["referencia"] is None
+
+
+def test_item_do_ml_nao_manda_marcador_comercial():
+    # Item de marketplace já é produto à venda; "marcador_comercial: null"
+    # virava "produto sem marcador comercial" na análise
+    produto = _dados(build_trend_prompt(_ml(), _norm()))["produto"]
+    assert "marcador_comercial" not in produto
+    assert "has_shop_product" not in produto
+
+
+def test_video_nao_ganha_bloco_de_ranking():
+    dados = _dados(build_trend_prompt(_ti(source="tiktok"), _norm()))
+    assert "posicao_ranking" not in dados["marketplace"]
+    assert dados["social"]["views_per_hour"] == 3_000.0
+
+
+def test_produto_sem_fonte_conta_como_video():
+    # Produto gravado antes de existir o campo `source` (só havia TikTok)
+    dados = _dados(build_trend_prompt(_ti(source=None), _norm()))
+    assert dados["social"] is not None
+
+
+def test_system_explica_como_ler_o_ranking():
+    system = build_trend_prompt(_ml(), _norm())["system"]
+    assert "posicao_ranking" in system
+    assert "posicao_ranking_inicio_janela" in system
+
+
+def _mercado():
+    return [ex for ex in FEW_SHOT if ex["entrada"].get("marketplace")]
+
+
+def test_ha_exemplos_de_item_do_marketplace_subindo_e_caindo():
+    classes = {ex["saida"]["trend_classification"] for ex in _mercado()}
+    assert {"SUBINDO", "EM_QUEDA"} <= classes
+
+
+def test_exemplos_de_marketplace_sao_coerentes_com_o_ranking():
+    for ex in _mercado():
+        m = ex["entrada"]["marketplace"]
+        subiu = m["posicao_ranking"] < m["posicao_ranking_inicio_janela"]
+        classe = ex["saida"]["trend_classification"]
+        if classe == "SUBINDO":
+            assert subiu and m["rank_momentum"] > 0
+        if classe == "EM_QUEDA":
+            # Queda no ranking: rank_momentum só mede subida e fica em 0
+            assert not subiu and m["rank_momentum"] == 0.0
+        assert ex["entrada"]["social"] is None

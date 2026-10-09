@@ -254,11 +254,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    arquivo novo em `backend/src/` entrou na imagem e não apareceu no container; um `up -d` logo
    depois recriou. Use `docker compose build && docker compose up -d`, e confira
    `docker inspect -f '{{.Image}}' trends_api` contra `docker image inspect -f '{{.Id}}' bot-trends-api`.
-10. **O LLM não vê nada de produto do Mercado Livre.** O prompt (`build_trend_prompt`) manda
-   sinais de vídeo, preço e `sold_quantity`, mas não `rank_position`, `rank_momentum` nem a
-   fonte. Em item do ML tudo isso é zero ou `None`, e o modelo responde 20 ou 40 sempre ("sem
-   dados de views/hora") — visto nos 33 produtos do ML em 2026-10-08. Enquanto não mudar, os 40%
-   do LLM no score final do ML são constantes: a ordem vem toda do numérico.
+10. **Produto em dois rankings mistura as posições.** O mesmo produto pode estar no
+   `/highlights` de duas categorias (ex.: fone em Celulares e em Eletrônicos). Cada coleta grava
+   uma leitura por ranking, com o **mesmo `ts`** e sem a categoria: a série vira 9, 15, 9, 15... e,
+   entre leituras empatadas, a ordem é arbitrária — `rank_momentum` e a posição atual podem
+   contar histórias diferentes. 5 de 94 produtos em 2026-10-08. A correção é na coleta.
+11. **A análise só vê 50 produtos por ciclo** (`limit_products=50`). Com 5 categorias do ML
+   são ~85 ativos: em 2026-10-08, 50 de 84 analisados, uns 40% de cada categoria de fora. Todos
+   com o mesmo horário de coleta, o corte entre eles é arbitrário.
 
 ## Já corrigido (não reintroduzir)
 
@@ -502,6 +505,13 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   falhar com `language override unsupported` — derrubou o backfill em produção e derrubaria a
   coleta. A v007 aponta o override para um campo que nunca é gravado. **O mongomock não
   reproduz isso**: teste de índice de texto vai em `test_search.py`, contra Mongo real.
+- **O LLM não via nada de produto do Mercado Livre** (TIE-42). O prompt mandava sinais de vídeo
+  zerados e a referência do grupo (views, engajamento) zerada, e nada do ranking: nos 33 produtos
+  do ML o `llm_score` saiu 20 ou 40, sempre, e toda análise dizia "sem tração social". Agora
+  (prompt v5) item de marketplace manda `social`/`referencia` `null`, a fonte, a posição no ranking
+  agora e no início da janela, o `rank_momentum` e as leituras, com 4 exemplos de ML. Com dados
+  reais: 6 valores de 25 a 65, apareceram `SUBINDO`/`EM_QUEDA`, nenhuma análise fala de social.
+  **Não volte a mandar o bloco social para item do ML** — zero de vídeo inexistente vira "parado".
 - **Recriar o beat atrasava toda task agendada pelo intervalo inteiro.** O `celerybeat-schedule`
   ficava na camada do container: todo `up -d --build` o zerava, e o Celery conta o intervalo a
   partir da subida — o `collect_ml` (6 h) ficava até 6 h sem rodar a cada deploy (visto em

@@ -93,6 +93,10 @@ def test_mesmas_metricas_mesma_chave():
         {"product_id": "p2"},
         {"commercial_marker": "link_bio"},
         {"n_readings": 2},
+        # TIE-42: vão para o prompt do item do ML; subir no ranking tem de chamar o LLM
+        {"source": "mercadolivre"},
+        {"rank_position": 3},
+        {"rank_position_start": 9},
     ],
 )
 def test_metrica_diferente_chave_diferente(mudanca):
