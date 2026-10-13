@@ -77,21 +77,29 @@ class HybridWeights:
         return asdict(self)
 
 
-# Classificação quando o LLM falha (só o numérico). Recalibrada em 2026-10-03:
-# sem ranking (vídeo do TikTok) e reviews no percentil 0,5 (TIE-16) o teto é ~67,5, e os
-# cortes antigos (75/85) deixavam tudo ESTAVEL. SUBINDO = ALERT_THRESHOLD
-# default, para o alerta do fallback não sair rotulado como ESTAVEL;
-# VIRALIZANDO exige ~p97 em todos os sinais medidos (nenhum vídeo no replay de
-# 24–25/09). Desde a TIE-48 cada fonte só pontua as próprias dimensões e o teto
-# é 100 para todas: estes cortes estão descalibrados até a TIE-43.
-FALLBACK_SUBINDO = 60.0
-FALLBACK_VIRALIZANDO = 66.0
+# Classificação quando o LLM falha (só o numérico), por fonte: (SUBINDO,
+# VIRALIZANDO). Recalibrada na TIE-43 com replay das coletas reais pelo motor
+# pós TIE-48 (2026-10-13; racional no README, "Alertas"):
+# - ML: numérico com mediana ~35 e p95 57. SUBINDO = ALERT_THRESHOLD default,
+#   para o alerta do fallback não sair rotulado como ESTAVEL (16 de 20 itens
+#   acima de 62 o LLM v5 chamou de SUBINDO); VIRALIZANDO só com ~p99.
+# - TikTok: só percentis de social/views/engajamento, mediana ~50 e p90 78.
+#   SUBINDO = ALERT_THRESHOLD_TIKTOK (~top 10%), VIRALIZANDO ~top 5%.
+#   Provisório: 1 dia de vídeos (24–25/09), sem LLM; recalibrar quando a
+#   coleta voltar.
+# Fonte desconhecida (dado legado) usa os cortes do ML.
+FALLBACK_CORTES: dict[str, tuple[float, float]] = {
+    "mercadolivre": (62.0, 80.0),
+    "tiktok": (85.0, 92.0),
+}
+FALLBACK_CORTES_PADRAO = FALLBACK_CORTES["mercadolivre"]
 
 
-def fallback_classification(numeric_score: float) -> str:
-    if numeric_score >= FALLBACK_VIRALIZANDO:
+def fallback_classification(numeric_score: float, source: str | None = None) -> str:
+    subindo, viralizando = FALLBACK_CORTES.get(source or "", FALLBACK_CORTES_PADRAO)
+    if numeric_score >= viralizando:
         return "VIRALIZANDO"
-    if numeric_score >= FALLBACK_SUBINDO:
+    if numeric_score >= subindo:
         return "SUBINDO"
     return "ESTAVEL"
 

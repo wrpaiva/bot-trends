@@ -105,3 +105,22 @@ def test_normalizacao_do_score_validada():
         _settings(SCORE_NORMALIZATION="zscore")
     with pytest.raises(ValidationError):
         _settings(SCORE_PERCENTILE_MIN_GROUP="1")
+
+
+def test_limiar_de_alerta_por_fonte():
+    # TIE-43: o numérico do vídeo tem outra escala (mediana ~50, p90 78)
+    s = Settings(ALERT_THRESHOLD=62, ALERT_THRESHOLD_TIKTOK=85)
+    assert s.alert_threshold("tiktok") == 85
+    assert s.alert_threshold("mercadolivre") == 62
+    # Fonte desconhecida usa o limiar padrão
+    assert s.alert_threshold(None) == 62
+
+
+@pytest.mark.parametrize("source", ["mercadolivre", "tiktok", None])
+def test_alerta_no_limiar_nao_sai_rotulado_como_estavel(source):
+    # Sem LLM o final é o numérico: um alerta exatamente no limiar default
+    # precisa cair pelo menos em SUBINDO no fallback da mesma fonte
+    from src.domain.scoring import fallback_classification
+
+    limiar = Settings().alert_threshold(source)
+    assert fallback_classification(limiar, source) != "ESTAVEL"
