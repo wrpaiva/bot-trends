@@ -10,6 +10,11 @@ Fallback, nesta ordem:
   1. categoria com >= `min_group` produtos → percentil na categoria;
   2. senão, pool global (todos do ciclo) com >= `min_group` → percentil global;
   3. senão → None: o scoring usa a normalização absoluta (faixas fixas).
+
+Métrica que vale zero em todo o grupo (TIE-48) não foi medida — no ML não há
+views nem avaliação — e vai para `nao_medidas`: o scoring a tira do cálculo em
+vez de dar 0,5 de empate a todos. `values` continua com o percentil, que o
+prompt manda ao LLM.
 """
 
 from __future__ import annotations
@@ -61,6 +66,8 @@ class Normalization:
     # TIE-26: referência do grupo para o LLM comparar o produto com os pares
     pool_size: int = 0
     reference: dict[str, dict[str, float]] = field(default_factory=dict)
+    # TIE-48: métricas com zero em todo o grupo — fora do score
+    nao_medidas: frozenset[str] = frozenset()
 
 
 class PercentileContext:
@@ -94,4 +101,5 @@ class PercentileContext:
                 }
                 for m, pop in populacao.items()
             },
+            nao_medidas=frozenset(m for m, pop in populacao.items() if not any(pop)),
         )
