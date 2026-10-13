@@ -1,5 +1,7 @@
 # tests/test_trend_engine.py
 
+from dataclasses import replace
+
 from src.application.trend_engine import HybridTrendEngine
 from src.domain.interfaces import LLMClient
 from src.domain.scoring import NumericScoreStrategy, fallback_classification
@@ -83,4 +85,15 @@ def test_engine_fallback_when_llm_fails():
     assert res.llm_score_0_100 == 0.0
     assert res.final_score_0_100 == n
     assert "LLM indisponível" in res.analysis
-    assert res.trend_classification == fallback_classification(n)
+    assert res.trend_classification == fallback_classification(n, ti.source)
+
+
+def test_fallback_usa_os_cortes_da_fonte():
+    # TIE-43: o mesmo numérico é SUBINDO no ML e ESTAVEL no TikTok
+    class _Fixo(NumericScoreStrategy):
+        def compute(self, ti, normalization=None):
+            return replace(super().compute(ti, normalization), score_0_100=70.0)
+
+    engine = HybridTrendEngine(_Fixo(), FakeLLM(fail=True))
+    assert engine.run(base_input(source="mercadolivre")).trend_classification == "SUBINDO"
+    assert engine.run(base_input(source="tiktok")).trend_classification == "ESTAVEL"

@@ -102,7 +102,8 @@ class HybridTrendEngine:
             )
 
         # fallback sem LLM
-        cls = fallback_classification(numeric_score)
+        # Cortes da fonte: a escala do numérico difere entre ML e TikTok (TIE-43)
+        cls = fallback_classification(numeric_score, ti.source)
 
         return HybridResult(
             product_id=ti.product_id,

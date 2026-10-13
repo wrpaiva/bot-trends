@@ -92,7 +92,7 @@ Variáveis que você provavelmente vai querer mexer:
 | `APIFY_TOKEN`, `TIKTOK_HASHTAGS` | backend | Coleta do TikTok. **Custa crédito**: ~US$ 0,0037 por vídeo |
 | `TIKTOK_RESULTS_PER_HASHTAG`, `TIKTOK_INTERVAL_MIN` | backend | Volume da coleta (default: 10 vídeos por hashtag a cada 120 min) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | backend | Alertas. Sem eles a análise roda, só não alerta |
-| `ALERT_THRESHOLD`, `ALERT_COOLDOWN_HOURS` | backend | Score mínimo para alertar e intervalo entre alertas do mesmo produto |
+| `ALERT_THRESHOLD`, `ALERT_THRESHOLD_TIKTOK`, `ALERT_COOLDOWN_HOURS` | backend | Score mínimo para alertar (ML e fonte desconhecida / vídeo do TikTok) e intervalo entre alertas do mesmo produto |
 
 A lista completa, com defaults, está em `backend/src/infrastructure/config.py`.
 
@@ -396,25 +396,57 @@ final_score = SCORE_W_NUMERIC × score_numérico + SCORE_W_LLM × score_llm     
 ```
 
 Se o LLM falhar, não estiver configurado ou responder fora do formato, o `final_score` é só o
-numérico, e a classificação sai do numérico (≥ 60 `SUBINDO`, ≥ 66 `VIRALIZANDO`; cortes
-calibrados para o teto de ~67,5 que o vídeo do TikTok tinha antes da TIE-48 — eram 75/85,
-inalcançáveis). Desde a TIE-48 o numérico de qualquer fonte vai até 100: recalibrar é a TIE-43.
+numérico, e a classificação sai do numérico com cortes **por fonte** (`FALLBACK_CORTES` em
+`scoring.py`): ML ≥ 62 `SUBINDO`, ≥ 80 `VIRALIZANDO`; TikTok ≥ 85 e ≥ 92. Racional em "Alertas".
 
 ### Alertas
 
-Alerta no Telegram quando `final_score ≥ ALERT_THRESHOLD` (default 60). O mesmo produto só
-realerta depois de `ALERT_COOLDOWN_HOURS` (default 24) — ou antes, se a classificação subir de
-faixa (ex.: `SUBINDO` → `VIRALIZANDO`). Falha no envio não interrompe a análise; o alerta é
-tentado de novo no próximo ciclo.
+Alerta no Telegram quando `final_score` passa do limiar **da fonte**: `ALERT_THRESHOLD`
+(default 62) para item do ML e fonte desconhecida, `ALERT_THRESHOLD_TIKTOK` (default 85) para
+vídeo. O mesmo produto só realerta depois de `ALERT_COOLDOWN_HOURS` (default 24) — ou antes, se a
+classificação subir de faixa (ex.: `SUBINDO` → `VIRALIZANDO`). Falha no envio não interrompe a
+análise; o alerta é tentado de novo no próximo ciclo. Um `alert_threshold` passado à task vale
+para todas as fontes (útil para testar o envio).
 
-**Por que 60** (calibrado em 2026-10-03): sem `rank_momentum` e `reviews_velocity` (vídeo do
-TikTok não tem ranking nem reviews; TIE-16), o numérico não passa de ~67,5 e o final de ~80,5 — o antigo 85 nunca disparava.
-Reprocessando com o motor atual as leituras reais do TikTok (24–25/09, 13 ciclos, 55 vídeos
-comerciais), o numérico teve p50 39, p90 52, p95 53 e só 4 vídeos passaram de 60. Nos 20
-insights com LLM (prompt v4), 60 deixa passar só o único `SUBINDO` (final 64,7): o LLM
-derruba os outros dois que tinham numérico acima de 60. **Desatualizado desde a TIE-48:** sem
-as dimensões inexistentes, o numérico de vídeo e de item do ML vai até 100 e a escala mudou —
-recalibrar o limiar e os cortes do fallback é a TIE-43.
+**Por que um limiar por fonte** (TIE-43, replay de 2026-10-13). Desde a TIE-48 cada fonte só
+pontua as próprias dimensões, e as escalas ficaram diferentes. Reprocessando com o motor atual
+todas as coletas reais, como a análise as veria em cada instante:
+
+| Numérico | p50 | p90 | p95 | p99 |
+|---|---|---|---|---|
+| ML (23 coletas, 06–13/10, 1.249 itens) | 35 | 55 | 57 | 67 |
+| TikTok (23 coletas, 24–25/09, 467 itens) | 50 | 78 | 88 | 97 |
+
+O vídeo só pontua percentis dentro do grupo (social, views, engajamento), então a mediana fica
+perto de 50; o item do ML depende da posição e da subida no ranking. Um limiar único de 62 daria
+~20–30 alertas/dia de TikTok, e o fallback chamaria 1 em cada 3 vídeos de `SUBINDO`.
+
+**ML: 62.** Combinando o numérico novo com o `llm_score` do prompt v5 gravado logo depois de cada
+coleta (897 itens, 98 produtos, 4,8 dias) e o cooldown de 24 h:
+
+| Limiar | Alertas/dia | O LLM chamou de `SUBINDO` |
+|---|---|---|
+| 60 | 4,3 | 42/45 |
+| **62** | **3,1** | **29/30** |
+| 65 | 1,4 | 14/14 |
+| 70 | 1,0 | 9/9 |
+
+62 é o ponto em que quase tudo que passa o LLM também vê subindo, com volume de ~3 por dia. O
+LLM pesa: numérico sozinho separa mal `SUBINDO` de `ESTAVEL` (medianas 39 e 36).
+
+**TikTok: 85, provisório.** Só há 1 dia de vídeos (setembro) e nenhum com o prompt atual. 85 é ~top
+10% do numérico, mas o final mistura o LLM: com numérico 100 o LLM precisa dar ≥ 63, com 90 ≥ 78
+(o prompt v4 deu de 15 a 75 aos vídeos). Com LLM, então, o alerta de vídeo é raro; no fallback
+(final = numérico) o replay dá ~9/dia. **Recalibre quando a coleta do TikTok voltar**, com o mesmo
+replay.
+
+**Fallback sem LLM.** O final é o numérico, e o corte de `SUBINDO` de cada fonte é igual ao seu
+limiar — senão o alerta do fallback sairia rotulado `ESTAVEL` (um teste garante). `VIRALIZANDO`:
+ML ≥ 80 (~p99; o LLM nunca deu `VIRALIZANDO` a item do ML), TikTok ≥ 92 (~top 5%). No replay,
+ML ≥ 62 no numérico dá ~1,5 alerta/dia, 16 de 20 vistos como `SUBINDO` pelo LLM.
+
+**Envio testado em produção:** 4 alertas reais do ML chegaram ao chat de tendências (10 e
+13/10, ainda com o motor anterior, scores 60–68).
 
 ### Backtest (TIE-23)
 

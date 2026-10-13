@@ -542,3 +542,26 @@ def test_sem_teto_devolve_todos_os_ativos(db):
     since = utcnow() - dt.timedelta(hours=72)
     _mais_produtos(db, 3)
     assert len(mod._produtos_ativos(db, since, None)) == 5
+
+
+def test_limiar_de_alerta_eh_o_da_fonte(db, monkeypatch):
+    # TIE-43: vídeo do TikTok usa ALERT_THRESHOLD_TIKTOK; o resto, ALERT_THRESHOLD
+    db["products"].update_one({"product_id": "p1"}, {"$set": {"source": "tiktok"}})
+    # "Produto p1" não tem marcador de venda: sem isto o filtro comercial o tira
+    monkeypatch.setattr(mod.settings, "TREND_REQUIRE_COMMERCIAL", False)
+    monkeypatch.setattr(mod.settings, "ALERT_THRESHOLD_TIKTOK", 101.0)
+
+    res = mod.hybrid_trend_analyze()
+
+    assert res["processed"] == 2 and res["alerts_sent"] == 1
+    assert len(_Telegram.enviados) == 1 and "Produto p2" in _Telegram.enviados[0]
+
+
+def test_limiar_passado_na_chamada_vale_para_todas_as_fontes(db, monkeypatch):
+    db["products"].update_one({"product_id": "p1"}, {"$set": {"source": "tiktok"}})
+    # "Produto p1" não tem marcador de venda: sem isto o filtro comercial o tira
+    monkeypatch.setattr(mod.settings, "TREND_REQUIRE_COMMERCIAL", False)
+    monkeypatch.setattr(mod.settings, "ALERT_THRESHOLD_TIKTOK", 101.0)
+    monkeypatch.setattr(mod.settings, "ALERT_THRESHOLD", 101.0)
+
+    assert mod.hybrid_trend_analyze(alert_threshold=40.0)["alerts_sent"] == 2

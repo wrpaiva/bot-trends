@@ -250,7 +250,6 @@ def hybrid_trend_analyze(
     db = get_db()
     insight_repo = TrendInsightRepo(db)
     alert_repo = AlertStateRepo(db)
-    threshold = settings.ALERT_THRESHOLD if alert_threshold is None else alert_threshold
     cooldown = dt.timedelta(hours=settings.ALERT_COOLDOWN_HOURS)
     alertas = {"alerts_sent": 0, "alerts_suppressed": 0, "alerts_failed": 0}
 
@@ -341,7 +340,11 @@ def hybrid_trend_analyze(
             continue
 
         # Dedupe/throttle (TIE-31): um alerta por produto por cooldown, salvo
-        # se a classificação subir de faixa.
+        # se a classificação subir de faixa. Limiar da fonte (TIE-43), salvo
+        # quando a chamada passa um explícito (vale para todas).
+        threshold = (
+            settings.alert_threshold(ti.source) if alert_threshold is None else alert_threshold
+        )
         now = utcnow()
         decisao = decide_alert(
             final_score=result.final_score_0_100,

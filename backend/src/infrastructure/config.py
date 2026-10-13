@@ -47,8 +47,11 @@ class Settings(BaseSettings):
     HEALTH_BACKUP_MAX_AGE_HOURS: int = Field(default=26, ge=1)
 
     # Alertas (TIE-31): score mínimo e intervalo entre alertas do mesmo produto.
-    # 60 calibrado em 2026-10-03 com dados reais (ver README, "Alertas")
-    ALERT_THRESHOLD: float = 60.0
+    # Por fonte desde a TIE-43 (replay de 2026-10-13, README "Alertas"): o
+    # numérico do vídeo tem outra escala. ALERT_THRESHOLD vale para o ML e para
+    # fonte desconhecida; o do TikTok é provisório até a coleta voltar.
+    ALERT_THRESHOLD: float = 62.0
+    ALERT_THRESHOLD_TIKTOK: float = 85.0
     ALERT_COOLDOWN_HOURS: int = 24
 
     # Mercado Livre
@@ -138,6 +141,10 @@ class Settings(BaseSettings):
 
     def hybrid_weights(self) -> HybridWeights:
         return HybridWeights(numeric=self.SCORE_W_NUMERIC, llm=self.SCORE_W_LLM)
+
+    def alert_threshold(self, source: str | None) -> float:
+        """Limiar de alerta da fonte; ALERT_THRESHOLD para as demais."""
+        return self.ALERT_THRESHOLD_TIKTOK if source == "tiktok" else self.ALERT_THRESHOLD
 
     @property
     def cors_origins(self) -> list[str]:

@@ -419,7 +419,7 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   foi recalibrado de 85 (inalcançável: teto ~80,5 sem `rank`/`reviews`, como no TikTok) para 60 em
   2026-10-03, com replay das leituras reais — racional no README, "Alertas". No mesmo dia a
   classificação do fallback sem LLM foi de 75/85 para 60/66 (`fallback_classification` em
-  `scoring.py`). **Quando o ML coletar, item com subida no ranking passa do teto: recalibre os dois.** Enquanto o ML não coleta, todo
+  `scoring.py`). Recalibrados por fonte na TIE-43 (ver "Já corrigido"). Enquanto o ML não coletava, todo
   produto tem `category=None` e o percentil é, na prática, global (TIE-21).
 - **Upsert de produto com corrida e id de vídeo instável.** O `ProductRepo.upsert` lia e depois
   gravava: a coleta que perdia uma corrida devolvia um UUID nunca gravado (métricas órfãs, série
@@ -533,8 +533,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   dimensões, grupo todo zero é "não medido", e a posição atual no `/highlights` virou dimensão
   (`SCORE_W_RANK_POSITION`, top 20: 1º = 1, 20º = 0). Nos 50 produtos reais: Spearman score ×
   posição 0,97 (preço −0,21), faixa 35–55 → 5–75. **A escala mudou para todas as fontes** (vídeo
-  vai até 100, antes ~67,5): `ALERT_THRESHOLD` e os cortes do fallback estão descalibrados até a
-  TIE-43.
+  vai até 100, antes ~67,5) — recalibrado na TIE-43.
+- **Limiar de alerta e fallback descalibrados** (TIE-43). Com a escala da TIE-48 o numérico do
+  vídeo tem mediana ~50 e p90 78, e o do ML mediana ~35 e p95 57: um limiar só não serve. Agora é
+  **por fonte**: `ALERT_THRESHOLD` = 62 (ML e fonte desconhecida), `ALERT_THRESHOLD_TIKTOK` = 85,
+  e `FALLBACK_CORTES` em `scoring.py` (ML 62/80, TikTok 85/92). O corte de `SUBINDO` do fallback
+  é **igual ao limiar da fonte** — `test_config.py` falha se um alerta no limiar sair `ESTAVEL`.
+  O do TikTok é provisório (1 dia de vídeos de setembro, sem LLM): **recalibre quando a coleta
+  voltar**, com o replay descrito no README ("Alertas"). Fonte nova entra nos dois.
 - **Coleta do ML misturava rankings, a análise cortava às cegas e oferta 404 era erro**
   (TIE-44). Produto em dois `/highlights` sai uma vez por coleta (armadilha 10); a análise
   cobre até `TREND_MAX_PRODUCTS` com corte determinístico e visível (armadilha 11); produto sem

@@ -4,8 +4,7 @@ import pytest
 
 from src.domain.percentile import Normalization
 from src.domain.scoring import (
-    FALLBACK_SUBINDO,
-    FALLBACK_VIRALIZANDO,
+    FALLBACK_CORTES,
     HybridWeights,
     NumericScoreStrategy,
     ScoreWeights,
@@ -170,41 +169,40 @@ def test_preco_ausente_eh_neutro_e_nao_estabilidade_maxima():
     assert res.components["nm_price_stability"] == 0.5
 
 
-# Classificação do fallback sem LLM, recalibrada em 2026-10-03: com rank e
-# reviews fora (TIE-16) o numérico não passava de ~67,5, e os cortes antigos
-# (75/85) deixavam todo produto em ESTAVEL. Desde a TIE-48 o vídeo chega a 100
-# (só pontua social/views/engajamento); recalibrar é a TIE-43.
+# Classificação do fallback sem LLM, por fonte (TIE-43, replay de 2026-10-13).
+# A escala do numérico difere: o vídeo pontua só percentis (mediana ~50, p90 78)
+# e o item do ML depende da posição e da subida no ranking (mediana ~35, p95 57).
 @pytest.mark.parametrize(
-    "score, esperado",
+    "source, score, esperado",
     [
-        (0.0, "ESTAVEL"),
-        (59.99, "ESTAVEL"),
-        (60.0, "SUBINDO"),
-        (65.99, "SUBINDO"),
-        (66.0, "VIRALIZANDO"),
-        (100.0, "VIRALIZANDO"),
+        ("mercadolivre", 61.99, "ESTAVEL"),
+        ("mercadolivre", 62.0, "SUBINDO"),
+        ("mercadolivre", 79.99, "SUBINDO"),
+        ("mercadolivre", 80.0, "VIRALIZANDO"),
+        ("tiktok", 84.99, "ESTAVEL"),
+        ("tiktok", 85.0, "SUBINDO"),
+        ("tiktok", 91.99, "SUBINDO"),
+        ("tiktok", 92.0, "VIRALIZANDO"),
+        # Fonte desconhecida (dado legado) usa os cortes do ML
+        (None, 62.0, "SUBINDO"),
+        ("outra", 61.99, "ESTAVEL"),
     ],
 )
-def test_fallback_classification(score, esperado):
-    assert fallback_classification(score) == esperado
+def test_fallback_classification_por_fonte(source, score, esperado):
+    assert fallback_classification(score, source) == esperado
 
 
-def test_fallback_subindo_alcancavel_pelo_teto_numerico():
-    # Teto de um vídeo do TikTok: os cortes do fallback precisam caber abaixo
-    # dele, senão a faixa nunca aparece
-    ti = base_input(source="tiktok", rank_momentum=0.0, price=None)
-    norm = Normalization(
-        values={
-            "views_per_hour": 1.0,
-            "engagement_per_hour": 1.0,
-            "social_velocity": 1.0,
-            "reviews_velocity": 0.5,
-        },
-        basis="global",
-    )
-    teto = NumericScoreStrategy().compute(ti, norm).score_0_100
-    assert fallback_classification(teto) == "VIRALIZANDO"
-    assert FALLBACK_SUBINDO < FALLBACK_VIRALIZANDO <= teto
+def test_mesmo_score_classifica_diferente_por_fonte():
+    # 70 é top ~1% do ML e só a mediana alta do TikTok
+    assert fallback_classification(70.0, "mercadolivre") == "SUBINDO"
+    assert fallback_classification(70.0, "tiktok") == "ESTAVEL"
+
+
+@pytest.mark.parametrize("source", ["mercadolivre", "tiktok"])
+def test_cortes_do_fallback_cabem_abaixo_do_teto(source):
+    # Teto de cada fonte é 100 desde a TIE-48: as faixas precisam aparecer
+    subindo, viralizando = FALLBACK_CORTES[source]
+    assert 0 < subindo < viralizando < 100
 
 
 # --- TIE-48: score por fonte -------------------------------------------------
