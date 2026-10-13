@@ -142,8 +142,17 @@ class MercadoLivreCollector:
 
     @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
     def _get_offers(self, product_id: str) -> list[dict[str, Any]]:
-        """Anúncios ativos que vendem o produto (preço, vendedor, item_id)."""
-        data = self._get(f"{self.base_url}/products/{product_id}/items").json()
+        """
+        Anúncios ativos que vendem o produto (preço, vendedor, item_id). Produto
+        sem nenhum anúncio ativo responde 404 (visto em Cozinha, 2026-10-08):
+        é lista vazia, não falha.
+        """
+        try:
+            data = self._get(f"{self.base_url}/products/{product_id}/items").json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return []
+            raise
         results = data.get("results") if isinstance(data, dict) else None
         if not isinstance(results, list):
             raise ValueError("resposta das ofertas sem lista de results")
@@ -195,6 +204,11 @@ class MercadoLivreCollector:
         """
         Yield de produtos normalizados.
 
+        Produto no /highlights de mais de uma categoria sai uma vez só, com a
+        categoria e a posição do primeiro ranking em que aparece (na ordem de
+        `categories`): duas leituras com o mesmo `ts` e posições diferentes
+        misturavam a série do `rank_momentum` (TIE-44).
+
         Formato de saída:
           {
             "source": "mercadolivre",
@@ -212,6 +226,7 @@ class MercadoLivreCollector:
           }
         """
         total_collected = 0
+        vistos: set[str] = set()
 
         for cat in self.categories:
             try:
@@ -226,6 +241,15 @@ class MercadoLivreCollector:
                 continue
 
             for product_id, posicao in posicoes.items():
+                if product_id in vistos:
+                    logger.info(
+                        "Produto %s já veio de outro ranking; posição %s em %s ignorada",
+                        product_id,
+                        posicao,
+                        cat,
+                    )
+                    continue
+                vistos.add(product_id)
                 try:
                     product = self._get_product(product_id)
                 except MLAuthError as e:

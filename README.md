@@ -344,12 +344,12 @@ respondia "sem tração social" em tudo. Com os produtos reais do ML (2026-10-08
 | Análises que citam views/engajamento/tração | quase todas | 0 |
 
 O `SUBINDO` é um carregador que foi de 11º a 7º; o `EM_QUEDA`, um fone que caiu de 13º para 15º.
-Produto que está no ranking de duas categorias mistura as posições numa série só (5 de 94 em
-2026-10-08): a leitura não diz de qual categoria é.
+Produto que está no ranking de duas categorias sai uma vez por coleta, com a categoria e a
+posição do primeiro ranking na ordem de `ml_category_id`; a leitura grava a categoria.
 
 **Cache.** A análise do LLM é reaproveitada enquanto as métricas de entrada do produto não
 mudam, por até `LLM_CACHE_TTL_HOURS` (default 6; `0` desliga), no Redis. O score numérico é
-sempre recalculado. Estimativa: sem cache, até 2.400 chamadas/dia (50 produtos × 48 análises);
+sempre recalculado. Estimativa: sem cache, até 2.400 chamadas/dia a cada 50 produtos (48 análises/dia);
 com cache, cada produto só chama o LLM quando o TikTok traz métricas novas (a cada
 `TIKTOK_INTERVAL_MIN`, 120 min → ≤ 12/dia) ou o TTL vence (4/dia se parado) — **teto de ~600/dia,
 −75%**. A taxa real sai no log `llm.cache` e no retorno da task (`llm_cache_hits`/`misses`).
@@ -447,6 +447,11 @@ de fora (não dá para refazer as chamadas do passado). **Rode de novo quando a 
 
 As tasks de coleta devolvem `status` `ok`, `partial` (alguma requisição falhou) ou `error`
 (nada coletado por falha), junto com `inserted` e `errors`.
+
+A análise pontua até `TREND_MAX_PRODUCTS` (default 200) produtos com leitura nas últimas 72 h,
+os de leitura mais recente primeiro (empate desempatado por `product_id`). O que passar do teto
+vai para o log `analise.corte` e para `skipped_over_limit` no retorno. Produto do ML sem anúncio
+ativo (ofertas → 404) entra sem preço e não conta como erro da coleta.
 
 **Circuit breaker.** Mercado Livre, Apify e LLM têm um circuito cada, com estado no Redis.
 `BREAKER_FAILURE_THRESHOLD` (5) falhas seguidas abrem o circuito: a coleta devolve

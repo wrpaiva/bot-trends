@@ -224,26 +224,28 @@ def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | N
 
 
 def _produtos_ativos(
-    db, since: dt.datetime, limit: int, until: dt.datetime | None = None
+    db, since: dt.datetime, limit: int | None, until: dt.datetime | None = None
 ) -> list[str]:
-    """Produtos com leitura na janela, os de leitura mais recente primeiro."""
+    """
+    Produtos com leitura na janela, os de leitura mais recente primeiro; `limit`
+    None devolve todos. Empate no horário (toda a coleta do ML grava o mesmo
+    `ts`) desempata por `product_id`: sem isso o Mongo devolve os empatados em
+    ordem arbitrária e o corte muda de uma execução para outra (TIE-44).
+    """
     janela = {"$gte": since} if until is None else {"$gte": since, "$lte": until}
-    return [
-        row["_id"]
-        for row in db["metrics"].aggregate(
-            [
-                {"$match": {"ts": janela}},
-                {"$group": {"_id": "$product_id", "last_ts": {"$max": "$ts"}}},
-                {"$sort": {"last_ts": -1}},
-                {"$limit": limit},
-            ]
-        )
+    pipeline = [
+        {"$match": {"ts": janela}},
+        {"$group": {"_id": "$product_id", "last_ts": {"$max": "$ts"}}},
+        {"$sort": {"last_ts": -1, "_id": 1}},
     ]
+    if limit is not None:
+        pipeline.append({"$limit": limit})
+    return [row["_id"] for row in db["metrics"].aggregate(pipeline)]
 
 
 @shared_task(name="tasks.hybrid_trend_analyze")
 def hybrid_trend_analyze(
-    hours: int = 72, limit_products: int = 50, alert_threshold: float | None = None
+    hours: int = 72, limit_products: int | None = None, alert_threshold: float | None = None
 ):
     db = get_db()
     insight_repo = TrendInsightRepo(db)
@@ -256,7 +258,17 @@ def hybrid_trend_analyze(
     window_from = since
     window_to = utcnow()
 
-    active = _produtos_ativos(db, since, limit_products)
+    # Teto explícito (TIE-44): antes eram 50 fixos e ~40% de cada categoria do
+    # ML ficava de fora sem ninguém saber. Quem passa do teto vai para o log.
+    teto = settings.TREND_MAX_PRODUCTS if limit_products is None else limit_products
+    todos = _produtos_ativos(db, since, None)
+    active = todos[:teto]
+    fora_do_teto = len(todos) - len(active)
+    if fora_do_teto:
+        logger.warning(
+            "analise.corte",
+            extra={"ativos": len(todos), "analisados": len(active), "fora": fora_do_teto},
+        )
 
     hybrid = settings.hybrid_weights()
     engine = HybridTrendEngine(
@@ -383,6 +395,7 @@ def hybrid_trend_analyze(
     return {
         "status": "ok",
         "processed": len(active),
+        "skipped_over_limit": fora_do_teto,
         "skipped_too_old": velhos,
         "skipped_no_product": sem_produto,
         **alertas,

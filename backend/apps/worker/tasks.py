@@ -68,10 +68,12 @@ def collect_ml():
     products = ProductRepo(db)
     metrics = MetricsRepo(db)
 
+    # Ordem estável: produto em dois rankings fica com a primeira categoria
+    # (TIE-44), e ela não pode mudar de uma coleta para a outra
     categories = list(
-        db["categories"].find(
-            {"enabled": True, "ml_category_id": {"$exists": True}}, {"ml_category_id": 1}
-        )
+        db["categories"]
+        .find({"enabled": True, "ml_category_id": {"$exists": True}}, {"ml_category_id": 1})
+        .sort("ml_category_id", 1)
     )
 
     category_ids = [c["ml_category_id"] for c in categories]
@@ -113,6 +115,8 @@ def collect_ml():
                         "source": "mercadolivre",
                         # Posição no /highlights da categoria (TIE-16)
                         "rank_position": item.get("rank_position"),
+                        # Ranking de onde a posição veio (TIE-44)
+                        "category": item.get("category"),
                         "price": item.get("price"),
                         "sold_quantity": item.get("sold_quantity"),
                         "reviews_total": reviews_total,
