@@ -489,3 +489,56 @@ def test_item_do_ml_sem_historico_vale_zero_e_loga_o_motivo(db, caplog):
     }
     comps = db["trend_insights"].find_one({"product_id": "ml1"})["debug"]["numeric_components"]
     assert comps["nm_rank"] == 0.0
+
+
+def _mais_produtos(db, n: int, ts=None) -> None:
+    ts = ts or utcnow() - dt.timedelta(hours=1)
+    for i in range(n):
+        pid = f"extra{i:03d}"
+        db["products"].insert_one({"product_id": pid, "title": pid})
+        db["metrics"].insert_one({"product_id": pid, "ts": ts, "source": "tiktok"})
+
+
+def test_analise_cobre_mais_que_os_50_de_antes(db):
+    # TIE-44: com o teto fixo em 50, ~40% de cada categoria do ML ficava de fora
+    _mais_produtos(db, 58)
+
+    res = mod.hybrid_trend_analyze()
+
+    assert res["processed"] == 60 and res["skipped_over_limit"] == 0
+
+
+def test_teto_de_produtos_vem_da_config_e_o_corte_aparece(db, monkeypatch):
+    monkeypatch.setattr(mod.settings, "TREND_MAX_PRODUCTS", 1)
+
+    res = mod.hybrid_trend_analyze()
+
+    assert res["processed"] == 1 and res["skipped_over_limit"] == 1
+    assert db["trend_insights"].count_documents({}) == 1
+
+
+def test_corte_entre_leituras_empatadas_eh_deterministico():
+    # Todos coletados no mesmo ts: sem desempate, o Mongo devolve os empatados
+    # em ordem arbitrária e o corte mudava entre execuções (backtest não
+    # reprodutível, armadilha 11). O mongomock já ordena o $group pela chave e
+    # esconderia o problema, por isso o teste olha o pipeline.
+    class _Spy:
+        pipeline: list = []
+
+        def __getitem__(self, nome):
+            return self
+
+        def aggregate(self, pipeline):
+            _Spy.pipeline = pipeline
+            return iter([])
+
+    mod._produtos_ativos(_Spy(), utcnow(), 10)
+
+    ordem = next(etapa["$sort"] for etapa in _Spy.pipeline if "$sort" in etapa)
+    assert list(ordem.items()) == [("last_ts", -1), ("_id", 1)]
+
+
+def test_sem_teto_devolve_todos_os_ativos(db):
+    since = utcnow() - dt.timedelta(hours=72)
+    _mais_produtos(db, 3)
+    assert len(mod._produtos_ativos(db, since, None)) == 5

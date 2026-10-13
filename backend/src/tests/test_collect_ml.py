@@ -213,3 +213,26 @@ def test_grava_a_posicao_no_ranking(db):
         (m["rank_position"] is None, m["rank_position"]) for m in db["metrics"].find()
     )
     assert posicoes == [(False, 4), (True, None)]
+
+
+def test_grava_a_categoria_do_ranking_na_leitura(db):
+    # TIE-44: a posição só faz sentido junto com o ranking de onde veio
+    _FakeCollector.itens = [dict(_item(1), category="MLB1", rank_position=4)]
+    _FakeCollector.erros = 0
+
+    tasks_mod.collect_ml()
+
+    assert db["metrics"].find_one()["category"] == "MLB1"
+
+
+def test_categorias_vao_ao_collector_em_ordem_estavel(db):
+    # O collector fica com a primeira categoria de produto em dois rankings:
+    # a ordem não pode depender da ordem de inserção no Mongo (TIE-44)
+    db["categories"].insert_many(
+        [{"enabled": True, "ml_category_id": c} for c in ("MLB5672", "MLB1051")]
+    )
+    _FakeCollector.itens = []
+
+    tasks_mod.collect_ml()
+
+    assert _FakeCollector.recebido["categories"] == ["MLB1", "MLB1051", "MLB5672"]

@@ -107,6 +107,9 @@ class Settings(BaseSettings):
     # TIE-18: vídeo do TikTok sem sinal de venda (loja, "link na bio", preço...)
     # fica fora da análise. false volta a pontuar tudo.
     TREND_REQUIRE_COMMERCIAL: bool = True
+    # TIE-44: máximo de produtos por ciclo de análise (os de leitura mais
+    # recente primeiro). Era 50 fixo e cortava ~40% do ML; o corte vai ao log.
+    TREND_MAX_PRODUCTS: int = Field(default=200, ge=1)
 
     # LLM
     LLM_BASE_URL: str | None = None

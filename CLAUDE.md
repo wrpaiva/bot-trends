@@ -260,18 +260,23 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    arquivo novo em `backend/src/` entrou na imagem e não apareceu no container; um `up -d` logo
    depois recriou. Use `docker compose build && docker compose up -d`, e confira
    `docker inspect -f '{{.Image}}' trends_api` contra `docker image inspect -f '{{.Id}}' bot-trends-api`.
-10. **Produto em dois rankings mistura as posições.** O mesmo produto pode estar no
-   `/highlights` de duas categorias (ex.: fone em Celulares e em Eletrônicos). Cada coleta grava
-   uma leitura por ranking, com o **mesmo `ts`** e sem a categoria: a série vira 9, 15, 9, 15... e,
-   entre leituras empatadas, a ordem é arbitrária — `rank_momentum` e a posição atual podem
-   contar histórias diferentes. 5 de 94 produtos em 2026-10-08. A correção é na coleta.
-11. **A análise só vê 50 produtos por ciclo** (`limit_products=50`). Com 5 categorias do ML
-   são ~85 ativos: em 2026-10-08, 50 de 84 analisados, uns 40% de cada categoria de fora. Todos
-   com o mesmo horário de coleta, o corte entre eles é arbitrário — e muda de uma execução para
-   outra: o **backtest não é reprodutível** (em 2026-10-13, duas rodadas seguidas no mesmo banco
-   avaliaram cortes diferentes). Compare versões do motor rodando as duas em sequência e olhando
-   corte a corte. O backtest também mede só views: nos cortes do ML o desfecho é 0 em todos, o
-   Spearman sai `None` e o prec@k é ruído de desempate por id (TIE-46).
+10. **Produto em dois rankings fica com a primeira categoria.** O mesmo produto pode estar no
+   `/highlights` de duas categorias (ex.: fone em Celulares e em Eletrônicos). Desde a TIE-44 o
+   collector o devolve uma vez só, com a categoria e a posição do **primeiro** ranking na ordem de
+   `ml_category_id` — `MLB1000` (Eletrônicos) vem antes de `MLB1051` (Celulares), então o celular
+   fica em Eletrônicos. Em 2026-10-13, 3 de 82. Leitura gravada antes disso ainda tem duas
+   posições no mesmo `ts` até sair da janela de 72 h. A leitura agora grava `category`.
+11. **A análise vê até `TREND_MAX_PRODUCTS` por ciclo** (default 200; eram 50 fixos, e em
+   2026-10-08 ~40% de cada categoria do ML ficava de fora). Passou do teto, a task loga
+   `analise.corte` e devolve `skipped_over_limit`. O corte desempata o mesmo `ts` por
+   `product_id` — antes era arbitrário e o backtest mudava de uma rodada para outra. O backtest
+   mede só views: nos cortes do ML o desfecho é 0 em todos, o Spearman sai `None` e o prec@k é
+   ruído de desempate (TIE-46).
+12. **`docker compose run ... api` morre com SIGTERM (exit 143) depois de ~1 min.** O
+   `HEALTHCHECK` da imagem (TIE-38) encerra o processo quando a liveness falha 3× — e num `run`
+   não há API respondendo. Para script longo, use `docker run --no-healthcheck` com a imagem
+   `bot-trends-api`, a rede `trends_backend`, `--env-file backend/.env` e `MONGO_URI`/`REDIS_URL`
+   montados a partir do `.env` da raiz (o compose os sobrescreve; o arquivo não tem o certo).
 
 ## Já corrigido (não reintroduzir)
 
@@ -530,6 +535,12 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   posição 0,97 (preço −0,21), faixa 35–55 → 5–75. **A escala mudou para todas as fontes** (vídeo
   vai até 100, antes ~67,5): `ALERT_THRESHOLD` e os cortes do fallback estão descalibrados até a
   TIE-43.
+- **Coleta do ML misturava rankings, a análise cortava às cegas e oferta 404 era erro**
+  (TIE-44). Produto em dois `/highlights` sai uma vez por coleta (armadilha 10); a análise
+  cobre até `TREND_MAX_PRODUCTS` com corte determinístico e visível (armadilha 11); produto sem
+  anúncio ativo (`/products/{id}/items` → 404) fica sem preço, sem contar erro nem deixar a
+  coleta `partial`. Validado em 2026-10-13: 90 ativos analisados (eram 50); coleta real com 82
+  produtos, 0 repetidos, 0 erros.
 - **Recriar o beat atrasava toda task agendada pelo intervalo inteiro.** O `celerybeat-schedule`
   ficava na camada do container: todo `up -d --build` o zerava, e o Celery conta o intervalo a
   partir da subida — o `collect_ml` (6 h) ficava até 6 h sem rodar a cada deploy (visto em

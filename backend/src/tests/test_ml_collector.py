@@ -338,3 +338,53 @@ def test_respeita_o_maximo_de_produtos_por_categoria():
     c.max_items_per_category = 2
     with c:
         assert [i["source_product_id"] for i in c.collect()] == ["P0", "P1"]
+
+
+def test_oferta_404_fica_sem_preco_sem_erro():
+    # Visto em Cozinha (2026-10-08): produto no ranking sem nenhum anúncio ativo
+    # responde 404 em /products/{id}/items. É "sem oferta", não falha da coleta.
+    def handler(request):
+        if request.url.path.endswith("/items"):
+            return httpx.Response(404, json={"message": "not found"})
+        return _handler_ok(request)
+
+    with _collector(handler) as c:
+        itens = list(c.collect())
+
+    assert itens[0]["price"] is None and itens[0]["marketplace"]["offers"] == 0
+    assert c.errors == 0
+
+
+def test_produto_em_dois_rankings_sai_uma_vez_com_a_primeira_categoria():
+    # TIE-44: o mesmo produto no /highlights de duas categorias gravava duas
+    # leituras com o mesmo ts e posições diferentes (9, 15, 9, 15...).
+    pedidos: list[str] = []
+
+    def handler(request):
+        path = request.url.path
+        pedidos.append(path)
+        if path.endswith("/category/MLB1"):
+            return httpx.Response(
+                200, json={"content": [{"id": "X", "type": "PRODUCT", "position": 9}]}
+            )
+        if path.endswith("/category/MLB2"):
+            return httpx.Response(
+                200,
+                json={
+                    "content": [
+                        {"id": "Y", "type": "PRODUCT", "position": 1},
+                        {"id": "X", "type": "PRODUCT", "position": 15},
+                    ]
+                },
+            )
+        return _handler_ok(request)
+
+    with _collector(handler, categorias=("MLB1", "MLB2")) as c:
+        itens = list(c.collect())
+
+    por_id = {i["source_product_id"]: i for i in itens}
+    assert len(itens) == 2 and set(por_id) == {"X", "Y"}
+    assert (por_id["X"]["category"], por_id["X"]["rank_position"]) == ("MLB1", 9)
+    # A repetição nem gasta requisição de detalhe e ofertas
+    assert pedidos.count("/products/X") == 1
+    assert c.errors == 0

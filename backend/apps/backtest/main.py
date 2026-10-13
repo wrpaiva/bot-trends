@@ -126,10 +126,12 @@ def run_backtest(
     *,
     horizon_hours: float = 6.0,
     window_hours: int = 72,
-    limit_products: int = 50,
+    limit_products: int | None = None,
     k: int = 3,
     min_pool: int = 5,
 ) -> dict:
+    if limit_products is None:
+        limit_products = settings.TREND_MAX_PRODUCTS
     cortes_ts = sorted({ensure_utc(t) for t in db["metrics"].distinct("ts")})
     cortes, pulados = [], 0
     for t in cortes_ts:
@@ -208,7 +210,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     parser.add_argument("--horizon-hours", type=float, default=6.0)
     parser.add_argument("--window-hours", type=int, default=72)
-    parser.add_argument("--limit-products", type=int, default=50)
+    # Sem valor, o mesmo teto da análise (TREND_MAX_PRODUCTS)
+    parser.add_argument("--limit-products", type=int, default=None)
     parser.add_argument("--k", type=int, default=3)
     parser.add_argument("--min-pool", type=int, default=5)
     parser.add_argument("--json", action="store_true", help="relatório completo em JSON")
