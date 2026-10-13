@@ -83,14 +83,16 @@ class Settings(BaseSettings):
     BREAKER_FAILURE_THRESHOLD: int = Field(default=5, ge=1)
     BREAKER_COOLDOWN_MIN: int = Field(default=30, ge=1)
 
-    # Pesos do score (TIE-22). Os 6 numéricos somam 1.0; NUMERIC + LLM somam 1.0.
-    # Validados na subida: peso errado derruba o processo, não a análise.
-    SCORE_W_RANK: float = 0.20
-    SCORE_W_REVIEWS: float = 0.15
+    # Pesos do score (TIE-22). Os 7 numéricos somam 1.0; NUMERIC + LLM somam 1.0.
+    # Validados na subida: peso errado derruba o processo, não a análise. Cada
+    # fonte só usa as dimensões que tem, com os pesos renormalizados (TIE-48).
+    SCORE_W_RANK_POSITION: float = 0.15
+    SCORE_W_RANK: float = 0.15
+    SCORE_W_REVIEWS: float = 0.10
     SCORE_W_SOCIAL: float = 0.25
     SCORE_W_VIEWS: float = 0.15
     SCORE_W_ENGAGEMENT: float = 0.15
-    SCORE_W_PRICE_STABILITY: float = 0.10
+    SCORE_W_PRICE_STABILITY: float = 0.05
     SCORE_W_NUMERIC: float = 0.6
     SCORE_W_LLM: float = 0.4
     # TIE-21: "percentile" compara views/engajamento dentro da categoria;
@@ -125,6 +127,7 @@ class Settings(BaseSettings):
 
     def score_weights(self) -> ScoreWeights:
         return ScoreWeights(
+            rank_position=self.SCORE_W_RANK_POSITION,
             rank=self.SCORE_W_RANK,
             reviews=self.SCORE_W_REVIEWS,
             social=self.SCORE_W_SOCIAL,

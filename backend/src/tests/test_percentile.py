@@ -157,3 +157,24 @@ def test_percentis_substituem_so_as_metricas_de_volume():
 def test_min_group_minimo_eh_2(min_group):
     with pytest.raises(ValueError):
         PercentileContext(CAPINHAS, min_group=min_group)
+
+
+# --- TIE-48: grupo todo zero é "não medido", não 0,5 -------------------------
+
+
+def test_metrica_toda_zero_no_grupo_vira_nao_medida():
+    # Produto do ML: nenhum tem avaliação nem sinal social; o percentil punha
+    # todos em 0,5 — 35 pontos iguais para todos, que não dizem nada
+    grupo = [
+        _ti(f"p{i}", "cat", v, social=0.0, reviews=0.0)
+        for i, v in enumerate([100, 200, 300, 400, 500])
+    ]
+    norm = PercentileContext(grupo, min_group=5).normalize(grupo[0])
+    assert norm.nao_medidas == frozenset({"social_velocity", "reviews_velocity"})
+
+
+def test_metrica_com_algum_valor_continua_medida():
+    grupo = [_ti(f"p{i}", "cat", 100, reviews=r) for i, r in enumerate([0, 0, 0, 0, 3.0])]
+    norm = PercentileContext(grupo, min_group=5).normalize(grupo[0])
+    assert "reviews_velocity" not in norm.nao_medidas
+    assert norm.values["reviews_velocity"] == 0.4

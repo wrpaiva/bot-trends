@@ -279,18 +279,28 @@ Datas saem em ISO 8601 com offset explícito (`2026-09-27T12:00:00+00:00`), semp
 
 ### Score numérico (0–100)
 
-Seis componentes normalizados para 0–1 (`backend/src/domain/scoring.py`). Os pesos abaixo são
+Sete componentes normalizados para 0–1 (`backend/src/domain/scoring.py`). Os pesos abaixo são
 os defaults; calibre por `SCORE_W_*` no `backend/.env` (precisam somar 1.0 — senão o processo
 não sobe). Cada insight grava os pesos usados em `score_weights`.
 
+**Cada fonte só pontua o que tem (TIE-48).** Item do ML usa posição no ranking, `rank_momentum`,
+`reviews_velocity` e estabilidade de preço; vídeo do TikTok usa aceleração, views/h e
+engajamento/h. O resto sai do cálculo e os pesos que sobram são renormalizados para somar 1 —
+com os defaults, no ML ranking + subida ficam com ~86% (reviews não medido), no TikTok
+social/views/engajamento com 45/27/27%. Métrica que vale zero em **todo** o grupo do percentil é
+"não medida" e também sai (antes o empate valia 0,5 para todos: 35 pontos iguais em cada produto
+do ML, e o ranking saía ordenado pela oscilação da oferta mais barata). Cada insight grava em
+`debug.numeric_components` as `dimensoes` usadas e os `pesos_efetivos`; dimensão de fora vale `null`.
+
 | Componente | Peso | Normalização |
 |---|---|---|
-| `rank_momentum` | 0,20 | subida no `/highlights` do ML entre a leitura mais antiga e a mais recente da janela, em escala log (20º → 1º = 1; parado, caindo ou sem ranking — TikTok — = 0) |
-| `reviews_velocity` | 0,15 | avaliações novas por dia (`/reviews/item` do ML, mais antiga × mais recente da janela); percentil na categoria (ou 0–50/dia). Sem avaliação — TikTok, e o ML desde 2026-10 (`/reviews/item` dá 403 a token comum) — = 0 |
+| posição no ranking (`SCORE_W_RANK_POSITION`) | 0,15 | posição atual no `/highlights` (top 20): 1º = 1, 20º = 0 |
+| `rank_momentum` | 0,15 | subida no `/highlights` do ML entre a leitura mais antiga e a mais recente da janela, em escala log (20º → 1º = 1; parado, caindo ou sem ranking — TikTok — = 0) |
+| `reviews_velocity` | 0,10 | avaliações novas por dia (`/reviews/item` do ML, mais antiga × mais recente da janela); percentil na categoria (ou 0–50/dia). Sem avaliação — TikTok, e o ML desde 2026-10 (`/reviews/item` dá 403 a token comum) — = 0 |
 | aceleração (`social_velocity`) | 0,25 | quanto o ritmo entre as 2 últimas leituras supera o ritmo médio de vida; 0 com leitura única ou abaixo de 1.000 views |
 | views por hora de vida | 0,15 | percentil na categoria (ou escala log até 100 mil/h no modo absoluto) |
 | engajamento por hora de vida | 0,15 | percentil na categoria (ou escala log até 10 mil/h) |
-| estabilidade de preço | 0,10 | `1 − price_volatility`; sem preço (TikTok) = 0,5, neutro |
+| estabilidade de preço | 0,05 | `1 − price_volatility` (só ML; dado sem fonte e sem preço = 0,5) |
 
 **Tendência é ritmo, não total.** Para vídeos com data de publicação, views e engajamento entram
 como **ritmo por hora de vida** (piso de `TREND_MIN_AGE_HOURS`, 6 h, para vídeo de minutos não
@@ -314,9 +324,8 @@ celular. Categoria com menos de `SCORE_PERCENTILE_MIN_GROUP` (5) produtos usa o 
 ciclo; pool global menor que isso volta à normalização `absolute` (as faixas da tabela). Cada
 insight grava a base usada em `debug.numeric_components.normalization`.
 
-> `rank_momentum` e `reviews_velocity` são calculados, mas só existem para item do ML — que ainda
-> não coleta (TIE-41) —, então hoje 35% do score numérico de um vídeo do TikTok continua zero
-> (`reviews_velocity` vira o percentil 0,5 do empate).
+> `reviews_velocity` do ML é zero para todos desde 2026-10 (403 em `/reviews/item`), então cai como
+> "não medido" e o score do ML sai da posição e da subida no ranking (+ preço).
 
 ### LLM
 
@@ -388,8 +397,8 @@ final_score = SCORE_W_NUMERIC × score_numérico + SCORE_W_LLM × score_llm     
 
 Se o LLM falhar, não estiver configurado ou responder fora do formato, o `final_score` é só o
 numérico, e a classificação sai do numérico (≥ 60 `SUBINDO`, ≥ 66 `VIRALIZANDO`; cortes
-abaixo do teto de ~67,5 de um vídeo do TikTok, que não tem ranking nem reviews — eram 75/85,
-inalcançáveis).
+calibrados para o teto de ~67,5 que o vídeo do TikTok tinha antes da TIE-48 — eram 75/85,
+inalcançáveis). Desde a TIE-48 o numérico de qualquer fonte vai até 100: recalibrar é a TIE-43.
 
 ### Alertas
 
@@ -403,8 +412,9 @@ TikTok não tem ranking nem reviews; TIE-16), o numérico não passa de ~67,5 e 
 Reprocessando com o motor atual as leituras reais do TikTok (24–25/09, 13 ciclos, 55 vídeos
 comerciais), o numérico teve p50 39, p90 52, p95 53 e só 4 vídeos passaram de 60. Nos 20
 insights com LLM (prompt v4), 60 deixa passar só o único `SUBINDO` (final 64,7): o LLM
-derruba os outros dois que tinham numérico acima de 60. Item do ML com subida no ranking pode
-ir além do teto de ~67,5: quando o ML coletar (TIE-41), recalibre com os dados dele.
+derruba os outros dois que tinham numérico acima de 60. **Desatualizado desde a TIE-48:** sem
+as dimensões inexistentes, o numérico de vídeo e de item do ML vai até 100 e a escala mudou —
+recalibrar o limiar e os cortes do fallback é a TIE-43.
 
 ### Backtest (TIE-23)
 

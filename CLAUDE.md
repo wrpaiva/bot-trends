@@ -162,6 +162,11 @@ A fórmula final é `numeric × SCORE_W_NUMERIC + llm × SCORE_W_LLM` (default 0
 fallback automático se o LLM falhar. Pesos que não somam 1.0 derrubam o processo na subida.
 Cada insight grava os pesos usados em `score_weights`. Mudou um **default**? Atualize os
 valores dourados de `src/tests/test_scoring.py` no mesmo commit, conscientemente (TIE-22).
+**Cada fonte só pontua as dimensões que tem** (`DIMENSOES_POR_FONTE`, TIE-48), e métrica com
+zero em todo o grupo do percentil é "não medida" (`Normalization.nao_medidas`): as duas saem do
+cálculo e os pesos que sobram são renormalizados. **Não volte a dar 0,5 a dimensão inexistente**
+— no ML eram 35 pontos de empate em todo produto e o ranking saía ordenado pela oscilação do
+preço. Fonte nova entra em `DIMENSOES_POR_FONTE`; sem isso pontua tudo, como dado legado.
 
 ---
 
@@ -193,8 +198,9 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    `rank_position` (`/highlights`); `reviews_total` e `sold_quantity` saem **None** desde
    2026-10-06, porque `/reviews/item` e `/items` dão 403 a token comum (armadilha 1) — o
    `reviews_velocity` do ML fica em 0 com `score.sem_historico` até achar outra fonte. As regras
-   ficam em `src/domain/rank_momentum.py` e `reviews_velocity.py`. Vídeo do TikTok fica em 0
-   nos dois: na prática, a maior parte desses 35% do score numérico segue zero.
+   ficam em `src/domain/rank_momentum.py` e `reviews_velocity.py`. Desde a TIE-48 vídeo do
+   TikTok não pontua essas dimensões (saem do cálculo), e o `reviews_velocity` do ML, zero em
+   todos, cai como "não medido": o score do ML sai de posição + subida no ranking (+ preço).
    `reviews_delta` é None sem leitura anterior (era 0) e ninguém o lê: o score usa o total.
    Item do ML sem histórico suficiente (sem ranking/avaliação, leitura única, leituras < 1 h)
    vale 0.0 e loga `score.sem_historico` com `componente` e `motivo`; parado/caindo é 0 medido,
@@ -521,6 +527,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   agora e no início da janela, o `rank_momentum` e as leituras, com 4 exemplos de ML. Com dados
   reais: 6 valores de 25 a 65, apareceram `SUBINDO`/`EM_QUEDA`, nenhuma análise fala de social.
   **Não volte a mandar o bloco social para item do ML** — zero de vídeo inexistente vira "parado".
+- **Score do ML ordenado pelo preço** (TIE-48). Views, engajamento, social e avaliações valiam 0
+  em todo item do ML e o percentil punha o empate em 0,5: 35 pontos iguais para todos, e só
+  variavam `rank_momentum` e estabilidade de preço. Agora cada fonte pontua só as próprias
+  dimensões, grupo todo zero é "não medido", e a posição atual no `/highlights` virou dimensão
+  (`SCORE_W_RANK_POSITION`, top 20: 1º = 1, 20º = 0). Nos 50 produtos reais: Spearman score ×
+  posição 0,97 (preço −0,21), faixa 35–55 → 5–75. **A escala mudou para todas as fontes** (vídeo
+  vai até 100, antes ~67,5): `ALERT_THRESHOLD` e os cortes do fallback estão descalibrados até a
+  TIE-43.
 - **Coleta do ML misturava rankings, a análise cortava às cegas e oferta 404 era erro**
   (TIE-44). Produto em dois `/highlights` sai uma vez por coleta (armadilha 10); a análise
   cobre até `TREND_MAX_PRODUCTS` com corte determinístico e visível (armadilha 11); produto sem
