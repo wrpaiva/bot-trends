@@ -8,6 +8,7 @@ as métricas de ranking; montar os cortes é com `apps/backtest`.
 
 - `spearman`: correlação entre as ordens (1 = mesma ordem, -1 = inversa).
 - `precision_at_k`: fração do top-k previsto que está no top-k real.
+- `acerto_top_k`: para desfecho 0/1 (TIE-46), fração do top-k previsto com 1.
 """
 
 from __future__ import annotations
@@ -64,6 +65,19 @@ def precision_at_k(previsto: dict[str, float], real: dict[str, float], *, k: int
     p = _top({i: previsto[i] for i in comuns}, k)
     r = _top({i: real[i] for i in comuns}, k)
     return len(p & r) / k
+
+
+def acerto_top_k(previsto: dict[str, float], real: dict[str, float], *, k: int) -> float:
+    """
+    Fração do top-k previsto cujo desfecho é 1. Para desfecho binário o
+    `precision_at_k` não serve: o "top-k real" de vários empates em 1 (ou em 0)
+    sai do desempate pelo id, não do que aconteceu.
+    """
+    comuns = previsto.keys() & real.keys()
+    if not comuns:
+        raise ValueError("previsto e real não têm ids em comum")
+    k = min(k, len(comuns))
+    return sum(real[i] for i in _top({i: previsto[i] for i in comuns}, k)) / k
 
 
 def summarize(valores: Sequence[float | None]) -> dict[str, float | int | None]:

@@ -83,9 +83,11 @@ docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE
   -v $PWD/backend:/app -w /app trends-dev pytest -p no:cacheprovider src/tests -q
 ```
 
-Backtest do score contra o baseline views/hora (TIE-23; só lê o banco, `--json` para o detalhe):
+Backtest do score contra o baseline views/hora (TIE-23; só lê o banco, `--json` para o detalhe)
+e, no ML, contra a posição atual no ranking (TIE-46):
 ```bash
 docker compose run --rm api python -m apps.backtest.main --horizon-hours 6
+docker compose run --rm api python -m apps.backtest.main --source mercadolivre --k 5
 ```
 Com pool pequeno (≤ 2k vídeos por corte) a precisão no top-k acerta por acaso — o relatório
 avisa; olhe o Spearman. Mexeu no motor? Rode antes e depois.
@@ -270,8 +272,8 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    2026-10-08 ~40% de cada categoria do ML ficava de fora). Passou do teto, a task loga
    `analise.corte` e devolve `skipped_over_limit`. O corte desempata o mesmo `ts` por
    `product_id` — antes era arbitrário e o backtest mudava de uma rodada para outra. O backtest
-   mede só views: nos cortes do ML o desfecho é 0 em todos, o Spearman sai `None` e o prec@k é
-   ruído de desempate (TIE-46).
+   do ML é separado (`--source mercadolivre`, TIE-46): o padrão (`tiktok`) mede views, que no ML
+   são 0 em todos.
 12. **`docker compose run ... api` morre com SIGTERM (exit 143) depois de ~1 min.** O
    `HEALTHCHECK` da imagem (TIE-38) encerra o processo quando a liveness falha 3× — e num `run`
    não há API respondendo. Para script longo, use `docker run --no-healthcheck` com a imagem
@@ -547,6 +549,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   anúncio ativo (`/products/{id}/items` → 404) fica sem preço, sem contar erro nem deixar a
   coleta `partial`. Validado em 2026-10-13: 90 ativos analisados (eram 50); coleta real com 82
   produtos, 0 repetidos, 0 erros.
+- **Backtest cego para o ML** (TIE-46). Só media views (0 em todo item do ML) e cortava em todo
+  instante de coleta, de qualquer fonte. Agora `--source mercadolivre` mede a posição no
+  `/highlights` na coleta seguinte (`posicao_futura`, `ganho_posicoes`, `entrou_top5`) contra
+  `posicao_atual` e `preco`; quem some do top 20 vale 21º só se a categoria foi coletada. Os
+  cortes são os instantes da própria fonte, e o horizonte aceita a leitura a partir de 0,9× (a
+  coleta de 6 h sai com 5,99 h — sem a folga, metade dos cortes sumia). Em 2026-10-14 (8 dias)
+  o score do ML **perdeu para a posição atual** (prec@5 0,71 × 0,95): rode de novo com 2–3
+  semanas antes de mexer nos pesos.
 - **Recriar o beat atrasava toda task agendada pelo intervalo inteiro.** O `celerybeat-schedule`
   ficava na camada do container: todo `up -d --build` o zerava, e o Celery conta o intervalo a
   partir da subida — o `collect_ml` (6 h) ficava até 6 h sem rodar a cada deploy (visto em

@@ -448,19 +448,20 @@ ML ≥ 62 no numérico dá ~1,5 alerta/dia, 16 de 20 vistos como `SUBINDO` pelo 
 **Envio testado em produção:** 4 alertas reais do ML chegaram ao chat de tendências (10 e
 13/10, ainda com o motor anterior, scores 60–68).
 
-### Backtest (TIE-23)
+### Backtest (TIE-23, TIE-46)
 
-O score ordena melhor o que vai crescer do que um baseline burro? Em cada instante de coleta T,
-`apps.backtest` monta as entradas **como a análise as veria em T** (só leituras até T, mesmo
+O score ordena melhor o que vai crescer do que um baseline burro? Em cada instante de coleta T
+da fonte, `apps.backtest` monta as entradas **como a análise as veria em T** (só leituras até T, mesmo
 filtro comercial, corte de idade e percentil), pontua com o motor numérico atual e compara três
 ordens — `score`, `views_por_hora` (o baseline) e `views_total` (popularidade) — com o que
-aconteceu até a primeira leitura ≥ T + horizonte: views ganhas por hora (`ganho_views_h`) e esse
-ritmo ÷ o ritmo de vida (`aceleracao`). Métricas: Spearman e precisão no top-k, média dos cortes.
-Só lê o banco.
+aconteceu até a primeira leitura a partir de 0,9× o horizonte (até 2×; a coleta "de 6 em 6 h" sai
+com 5,99 h): views ganhas por hora (`ganho_views_h`) e esse ritmo ÷ o ritmo de vida
+(`aceleracao`). Métricas: Spearman e precisão no top-k, média dos cortes. Só lê o banco.
 
 ```bash
 docker compose run --rm api python -m apps.backtest.main                       # horizonte 6 h
 docker compose run --rm api python -m apps.backtest.main --horizon-hours 3 --json
+docker compose run --rm api python -m apps.backtest.main --source mercadolivre --k 5
 ```
 
 **Resultado em 2026-10-04 — inconclusivo.** As leituras reais cobrem só 24/09 02h → 25/09 06h e a
@@ -475,6 +476,29 @@ vídeos. Ampliando o pool (`--limit-products 500 --k 3`), Spearman médio contra
 O score empata ou fica levemente à frente do baseline, e os dois batem a popularidade pura — mas
 com 5–7 vídeos por corte e cortes que compartilham vídeos, nada disso é significativo. O LLM fica
 de fora (não dá para refazer as chamadas do passado). **Rode de novo quando a coleta voltar.**
+
+**Mercado Livre (`--source mercadolivre`, TIE-46).** O ML não dá vendas, mas o `/highlights` é o
+ranking de mais vendidos: o desfecho é a posição na coleta seguinte. Entram os produtos que
+estavam no ranking em T; preditores `score`, `posicao_atual` e `preco` (o mais barato primeiro);
+desfechos `posicao_futura`, `ganho_posicoes` e `entrou_top5` (0/1, só quem estava fora do top 5;
+`prec@k` vira acerto no top-k, compare com a coluna `base`, a fração que entrou). Quem some do
+ranking conta como 21º, se a categoria dele foi coletada naquele instante.
+
+**Resultado preliminar em 2026-10-14** (8 dias de coleta, 26 coletas, até 84 produtos por corte;
+`--k 5`). Spearman / prec@5, média dos cortes:
+
+| Horizonte | Desfecho | `score` | `posicao_atual` | `preco` |
+|---|---|---|---|---|
+| 6 h | `posicao_futura` | +0,95 / 0,71 | **+0,97 / 0,95** | −0,31 / 0,13 |
+| 6 h | `ganho_posicoes` | −0,06 / 0,08 | −0,06 / 0,05 | +0,04 / 0,17 |
+| 24 h | `posicao_futura` | +0,92 / 0,74 | **+0,94 / 0,92** | −0,35 / 0,13 |
+| 24 h | `entrou_top5` (base 0,02) | +0,24 / 0,11 | +0,23 / 0,12 | +0,17 / 0,03 |
+
+Leitura: o score do ML **não bate a posição atual** — ele é quase a posição (que virou dimensão
+na TIE-48) com ruído da subida no ranking e do preço, e erra mais o top 5 seguinte. Ninguém prevê
+quem vai ganhar posições, e entrar no top 5 é raro demais (1–2% por corte, 10 cortes com evento)
+para separar score de baseline. Só `posicao_futura` tem sinal, e é persistência. **Rode de novo
+com 2 a 3 semanas de coleta** antes de mexer nos pesos do ML.
 
 ---
 
