@@ -3,7 +3,7 @@
 
 import pytest
 
-from src.domain.backtest import precision_at_k, spearman, summarize
+from src.domain.backtest import acerto_top_k, precision_at_k, spearman, summarize
 
 
 def test_spearman_ordem_identica_e_inversa():
@@ -57,3 +57,21 @@ def test_precision_at_k_sem_ids_em_comum_falha():
 def test_summarize_media_ignorando_none():
     assert summarize([0.5, None, 0.1]) == {"media": pytest.approx(0.3), "n": 2}
     assert summarize([None]) == {"media": None, "n": 0}
+
+
+def test_acerto_top_k_e_a_fracao_do_top_previsto_com_desfecho_1():
+    # Desfecho binário (TIE-46, "entrou no top 5"): o top-k real de um 0/1 é
+    # sorteado pelo desempate; o que importa é quantos do top-k previsto deram 1
+    previsto = {"a": 9, "b": 8, "c": 1, "d": 0}
+    real = {"a": 1, "b": 0, "c": 1, "d": 0}
+    assert acerto_top_k(previsto, real, k=2) == pytest.approx(0.5)
+    assert acerto_top_k(previsto, real, k=1) == pytest.approx(1.0)
+
+
+def test_acerto_top_k_desempata_o_previsto_pelo_id():
+    assert acerto_top_k({"b": 1, "a": 1}, {"a": 1, "b": 0}, k=1) == 1.0
+
+
+def test_acerto_top_k_sem_ids_em_comum_falha():
+    with pytest.raises(ValueError):
+        acerto_top_k({"a": 1}, {"b": 1}, k=1)

@@ -114,3 +114,16 @@ def test_main_imprime_a_tabela(db, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["backtest", "--horizon-hours", "6", "--min-pool", "3"])
     assert bt.main() == 0
     assert "Cortes avaliados: 1" in capsys.readouterr().out
+
+
+def test_coleta_que_sai_um_pouco_antes_do_horizonte_conta(db):
+    # TIE-46: o "6 em 6 h" da coleta sai com 5,99 h; sem folga o corte sumia
+    for m in db["metrics"].find({"ts": {"$gt": T0}}):
+        db["metrics"].update_one({"_id": m["_id"]}, {"$set": {"ts": T0 + dt.timedelta(hours=5.99)}})
+    rel = bt.run_backtest(db, horizon_hours=6, k=2, min_pool=3)
+    assert [c["T"] for c in rel["cortes"]] == [T0.isoformat()]
+
+
+def test_fonte_desconhecida_falha():
+    with pytest.raises(ValueError):
+        bt.run_backtest(mongomock.MongoClient(tz_aware=True).db, source="shopee")
