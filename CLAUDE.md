@@ -607,10 +607,12 @@ aparece em `claude mcp list` mas as tools não vêm), abra uma sessão nova; nã
 **Bloqueado**, motivo registrado, e pare essa tarefa. Erro técnico: até 3 tentativas com
 abordagens *diferentes*; bloqueio externo não queima tentativa. Não mexa em outras tarefas.
 
-**O workspace esgotou os blocos gratuitos.** Mudar propriedade (`update_properties`) e editar
-texto de bloco existente (`update_content`) funcionam; `insert_content` e criar página/tarefa
-falham. **Comentário funciona** (confirmado em 2026-10-04) — é onde vão o motivo do bloqueio e o
-PR entregue. Tarefa nova não dá para criar — proponha na conversa.
+**Card antes do ID.** O `ID` (TIE-NN) é auto-incremento do Notion: não use um número em branch
+ou commit antes de o card existir. Em 2026-10-13 o primeiro card criado levou TIE-42, que já
+estava no PR #27; a página virou a do prompt v5 e o card novo foi recriado como TIE-48. De
+2026-09-27 a 2026-10-13 o workspace ficou sem blocos gratuitos (criar página e `insert_content`
+falhavam) por ter dois membros; com um só, voltou. Se o limite voltar, comentário e
+`update_content` continuam funcionando.
 
 **Cite o ID no título do PR e no commit (`TIE-XX: ...`).** Uma automação de reconciliação busca
 o PR de cada tarefa pelo ID e, sem achar, muda o status para **Bloqueado**. Foi o que aconteceu
