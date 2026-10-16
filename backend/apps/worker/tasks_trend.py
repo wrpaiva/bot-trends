@@ -105,7 +105,13 @@ VELHO = object()
 SEM_PRODUTO = object()
 
 
-def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | None = None):
+def _build_input(
+    db,
+    product_id: str,
+    since: dt.datetime,
+    until: dt.datetime | None = None,
+    sem_historico: list[dict] | None = None,
+):
     """
     (TrendInput, fontes, sinais | None, marcador comercial | None), `VELHO`,
     `SEM_PRODUTO`, ou None se faltar produto ou métricas. Com data de
@@ -115,6 +121,9 @@ def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | N
 
     `until` corta as leituras posteriores — o backtest (TIE-23) monta a entrada
     como a análise a veria naquele instante.
+
+    `sem_historico` recebe os sinais de marketplace que valeram 0 sem medida;
+    quem chama decide o que logar (`_logar_sem_historico`, TIE-49).
     """
     product = db["products"].find_one(
         {"product_id": product_id},
@@ -178,17 +187,16 @@ def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | N
     reviews = reviews_velocity_medido(
         [ReviewsReading(ts=ensure_utc(m["ts"]), total=m.get("reviews_total")) for m in metrics]
     )
-    if product.get("source") == "mercadolivre":
+    if sem_historico is not None and product.get("source") == "mercadolivre":
         for componente, medida in (("rank_momentum", rank), ("reviews_velocity", reviews)):
             if medida.motivo:
-                logger.info(
-                    "score.sem_historico",
-                    extra={
+                sem_historico.append(
+                    {
                         "product_id": product_id,
                         "componente": componente,
                         "motivo": medida.motivo,
                         "leituras": len(metrics),
-                    },
+                    }
                 )
 
     posicoes = [m["rank_position"] for m in metrics if m.get("rank_position")]
@@ -221,6 +229,37 @@ def _build_input(db, product_id: str, since: dt.datetime, until: dt.datetime | N
         rank_position_start=posicoes[-1] if posicoes else None,
     )
     return ti, sources, sinais, marcador
+
+
+# Motivo que diz "a leitura não traz o dado", e não "pouca leitura"
+_SEM_DADO = ("sem_ranking", "sem_avaliacoes")
+
+
+def _logar_sem_historico(ocorrencias: list[dict], itens_ml: int) -> None:
+    """
+    Loga os sinais de marketplace que valeram 0 sem medida (TIE-16).
+
+    Quando a fonte inteira não traz o dado — hoje `/reviews/item` dá 403 a token
+    comum e nenhum item do ML tem avaliação — vira um resumo por ciclo, com a
+    contagem; um log por produto eram ~100 linhas a cada 30 min, e escondiam as
+    faltas individuais (item novo no ranking, `leitura_unica`), que continuam
+    saindo por produto (TIE-49).
+    """
+    resumidos = set()
+    for componente in ("rank_momentum", "reviews_velocity"):
+        do_componente = [o for o in ocorrencias if o["componente"] == componente]
+        motivos = {o["motivo"] for o in do_componente}
+        if itens_ml and len(do_componente) == itens_ml and len(motivos) == 1:
+            (motivo,) = motivos
+            if motivo in _SEM_DADO:
+                resumidos.add(componente)
+                logger.info(
+                    "score.sem_historico",
+                    extra={"componente": componente, "motivo": motivo, "produtos": itens_ml},
+                )
+    for o in ocorrencias:
+        if o["componente"] not in resumidos:
+            logger.info("score.sem_historico", extra=o)
 
 
 def _produtos_ativos(
@@ -282,10 +321,14 @@ def hybrid_trend_analyze(
 
     # Fase 1: monta as entradas de todos os produtos do ciclo — o percentil
     # (TIE-21) precisa da população inteira antes de pontuar qualquer um.
-    brutas = [_build_input(db, pid, since) for pid in active]
+    sem_historico: list[dict] = []
+    brutas = [_build_input(db, pid, since, sem_historico=sem_historico) for pid in active]
     velhos = sum(1 for e in brutas if e is VELHO)
     sem_produto = sum(1 for e in brutas if e is SEM_PRODUTO)
     entradas = [e for e in brutas if e not in (None, VELHO, SEM_PRODUTO)]
+    _logar_sem_historico(
+        sem_historico, sum(1 for ti, *_ in entradas if ti.source == "mercadolivre")
+    )
 
     contexto = (
         PercentileContext(
