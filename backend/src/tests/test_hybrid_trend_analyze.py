@@ -491,6 +491,86 @@ def test_item_do_ml_sem_historico_vale_zero_e_loga_o_motivo(db, caplog):
     assert comps["nm_rank"] == 0.0
 
 
+def _item_ml(db, pid: str, posicoes: list[int], reviews: list[int | None]) -> None:
+    db["products"].insert_one({"product_id": pid, "title": pid, "source": "mercadolivre"})
+    for i, (pos, rev) in enumerate(zip(posicoes, reviews, strict=True)):
+        db["metrics"].insert_one(
+            {
+                "product_id": pid,
+                "ts": utcnow() - dt.timedelta(hours=1 + 6 * i),
+                "source": "mercadolivre",
+                "rank_position": pos,
+                "reviews_total": rev,
+                "price": 100.0,
+            }
+        )
+
+
+def _sem_historico(caplog) -> list:
+    return [r for r in caplog.records if r.getMessage() == "score.sem_historico"]
+
+
+def test_fonte_sem_avaliacoes_loga_um_resumo_por_ciclo(db, caplog):
+    # TIE-49: /reviews/item dá 403 a token comum, então nenhum item do ML tem
+    # avaliação. Um log por produto a cada ciclo (393 em 2 h) era ruído puro.
+    for i in range(3):
+        _item_ml(db, f"ml{i}", [5, 8], [None, None])
+
+    with caplog.at_level("INFO", logger=mod.logger.name):
+        mod.hybrid_trend_analyze(hours=72)
+
+    registros = _sem_historico(caplog)
+    assert len(registros) == 1
+    resumo = registros[0]
+    assert (resumo.componente, resumo.motivo, resumo.produtos) == (
+        "reviews_velocity",
+        "sem_avaliacoes",
+        3,
+    )
+    assert not hasattr(resumo, "product_id")
+
+
+def test_falta_individual_continua_logando_por_produto(db, caplog):
+    # Um item sem avaliação entre outros que têm é falta do item, não da fonte
+    _item_ml(db, "ml_com", [5, 8], [40, 10])
+    _item_ml(db, "ml_sem", [5, 8], [None, None])
+    _item_ml(db, "ml_novo", [3], [7])
+
+    with caplog.at_level("INFO", logger=mod.logger.name):
+        mod.hybrid_trend_analyze(hours=72)
+
+    assert {(r.product_id, r.componente, r.motivo) for r in _sem_historico(caplog)} == {
+        ("ml_sem", "reviews_velocity", "sem_avaliacoes"),
+        ("ml_novo", "rank_momentum", "leitura_unica"),
+        ("ml_novo", "reviews_velocity", "leitura_unica"),
+    }
+
+
+def test_leitura_unica_loga_por_produto_mesmo_com_a_fonte_sem_avaliacoes(db, caplog):
+    # O caso que o ruído escondia: item novo no ranking, sem rank_momentum
+    _item_ml(db, "ml_velho", [5, 8], [None, None])
+    _item_ml(db, "ml_novo", [3], [None])
+
+    with caplog.at_level("INFO", logger=mod.logger.name):
+        mod.hybrid_trend_analyze(hours=72)
+
+    registros = _sem_historico(caplog)
+    por_produto = {
+        (r.product_id, r.componente, r.motivo) for r in registros if hasattr(r, "product_id")
+    }
+    resumos = [(r.componente, r.motivo, r.produtos) for r in registros if hasattr(r, "produtos")]
+    assert por_produto == {("ml_novo", "rank_momentum", "leitura_unica")}
+    assert resumos == [("reviews_velocity", "sem_avaliacoes", 2)]
+
+
+def test_video_do_tiktok_nao_loga_sem_historico(db, caplog):
+    # O fixture só tem vídeos: nenhum log, nem resumo
+    with caplog.at_level("INFO", logger=mod.logger.name):
+        mod.hybrid_trend_analyze(hours=72)
+
+    assert _sem_historico(caplog) == []
+
+
 def _mais_produtos(db, n: int, ts=None) -> None:
     ts = ts or utcnow() - dt.timedelta(hours=1)
     for i in range(n):

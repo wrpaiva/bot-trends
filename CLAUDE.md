@@ -206,7 +206,10 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    `reviews_delta` é None sem leitura anterior (era 0) e ninguém o lê: o score usa o total.
    Item do ML sem histórico suficiente (sem ranking/avaliação, leitura única, leituras < 1 h)
    vale 0.0 e loga `score.sem_historico` com `componente` e `motivo`; parado/caindo é 0 medido,
-   sem log. As regras devolvem `Medida(valor, motivo)` (`*_medido`); o log fica na task. E boa parte do topo do ranking é
+   sem log. Quando **nenhum** item do ML do ciclo traz o dado (`sem_avaliacoes`/`sem_ranking`
+   em todos — hoje, avaliações), sai um resumo por ciclo com `produtos` e sem `product_id`, em
+   vez de um log por produto (eram 393 em 2 h, TIE-49); falta individual (`leitura_unica`) segue
+   por produto. Backtest e `prompt_eval` não logam isso. As regras devolvem `Medida(valor, motivo)` (`*_medido`); o log fica na task. E boa parte do topo do ranking é
    conteúdo sem produto (dança, meme de `#fyp`) — resolvido pelo filtro comercial (ver "Já
    corrigido"); o vínculo TikTok ↔ produto do ML continua pendente (TIE-18).
 3. **`MONGO_PASSWORD` só vale na primeira subida do volume.** `MONGO_INITDB_ROOT_PASSWORD` é
