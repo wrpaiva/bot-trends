@@ -1,6 +1,6 @@
 // src/ranking.test.js — lógica da tela de ranking (TIE-28)
 import { describe, expect, it } from "vitest";
-import { sortItems, viewState, RISK_ORDER, CLASS_ORDER } from "./ranking.js";
+import { sortItems, viewState, ultimaRequisicao, RISK_ORDER, CLASS_ORDER } from "./ranking.js";
 
 const itens = [
   { product_id: "a", title: "Beta", final_score: 50, trend_classification: "SUBINDO", risk_level: "ALTO" },
@@ -51,5 +51,45 @@ describe("viewState", () => {
   });
   it("vazio", () => {
     expect(viewState({ loading: false, error: "", items: [] })).toBe("empty");
+  });
+});
+
+// QA 2026-10-14: trocar o período e logo a fonte fazia a resposta antiga
+// (source=all, mais lenta) sobrescrever o vazio do TikTok
+describe("ultimaRequisicao", () => {
+  it("só a requisição mais nova continua valendo", () => {
+    const seq = ultimaRequisicao();
+    const antiga = seq.inicia();
+    const nova = seq.inicia();
+    expect(antiga.valida()).toBe(false);
+    expect(nova.valida()).toBe(true);
+  });
+
+  it("começar outra cancela a anterior", () => {
+    const seq = ultimaRequisicao();
+    const antiga = seq.inicia();
+    seq.inicia();
+    expect(antiga.signal.aborted).toBe(true);
+  });
+
+  it("resposta fora de ordem é descartada", async () => {
+    const seq = ultimaRequisicao();
+    let tela = null;
+    const carrega = async (valor, atraso) => {
+      const req = seq.inicia();
+      await new Promise((r) => setTimeout(r, atraso));
+      if (req.valida()) tela = valor;
+    };
+    // "all" sai primeiro e chega por último
+    await Promise.all([carrega("all", 20), carrega("tiktok", 1)]);
+    expect(tela).toBe("tiktok");
+  });
+
+  it("cancela() invalida a pendente (desmontagem)", () => {
+    const seq = ultimaRequisicao();
+    const req = seq.inicia();
+    seq.cancela();
+    expect(req.valida()).toBe(false);
+    expect(req.signal.aborted).toBe(true);
   });
 });

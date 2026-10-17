@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
-import { sortItems } from "./ranking.js";
+import { sortItems, ultimaRequisicao } from "./ranking.js";
 import Filters from "./components/Filters.jsx";
 import RankingTable from "./components/RankingTable.jsx";
 import ProductDrawer from "./components/ProductDrawer.jsx";
@@ -27,19 +27,31 @@ export default function App() {
 
   const params = useMemo(() => ({ hours, limit, source }), [hours, limit, source]);
 
+  // Só a requisição mais nova grava na tela (ver ultimaRequisicao)
+  const requisicoes = useRef(null);
+  if (requisicoes.current === null) requisicoes.current = ultimaRequisicao();
+
   // append=false recomeça do topo (filtros mudaram ou "Atualizar");
   // append=true busca a próxima página e acrescenta
   async function load(append = false) {
+    const req = requisicoes.current.inicia();
     setLoading(true);
     setError("");
     try {
-      const data = await api.rankingsLatest({ ...params, cursor: append ? nextCursor : null });
+      const data = await api.rankingsLatest({
+        ...params,
+        cursor: append ? nextCursor : null,
+        signal: req.signal,
+      });
+      if (!req.valida()) return;
       setItems((prev) => (append ? [...prev, ...(data.items || [])] : data.items || []));
       setNextCursor(data.next_cursor || null);
     } catch (e) {
+      if (!req.valida()) return; // abortada por uma mais nova: não é erro
       setError(e.message || "Erro ao carregar ranking");
     } finally {
-      setLoading(false);
+      // Só a mais nova reabilita os botões
+      if (req.valida()) setLoading(false);
     }
   }
 
@@ -47,6 +59,8 @@ export default function App() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hours, limit, source]);
+
+  useEffect(() => () => requisicoes.current.cancela(), []);
 
   return (
     <div style={{ fontFamily: "system-ui", padding: 16, maxWidth: 1200, margin: "0 auto" }}>
