@@ -6,9 +6,11 @@ import json
 import logging
 from collections.abc import Iterable
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
+from src.domain.product_match import Candidato
 from src.infrastructure.collectors.http_policy import RateLimiter, retry_transient
 from src.infrastructure.collectors.ml_auth import MercadoLivreAuth, MLAuthError
 from src.infrastructure.config import settings
@@ -279,6 +281,56 @@ class MercadoLivreCollector:
                 total_collected += 1
 
         logger.info(f"Coleta finalizada: {total_collected} produtos, {self.errors} erros")
+
+    # --- Busca no catálogo (TIE-18) ------------------------------------------
+    # `/sites/MLB/search` dá 403 a token comum, mas `/products/search` e o
+    # `domain_discovery` respondem (2026-10-16). É por aqui que um vídeo do
+    # TikTok acha o produto que vende. Falha devolve None e conta em `errors`;
+    # `MLAuthError` sobe — sem token nenhuma busca funcionaria.
+
+    @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
+    def _get_search(self, consulta: str) -> list[dict[str, Any]]:
+        url = f"{self.base_url}/products/search?" + urlencode(
+            {"site_id": self.site_id, "status": "active", "q": consulta}
+        )
+        results = self._get(url).json().get("results")
+        if not isinstance(results, list):
+            raise ValueError("resposta da busca sem lista de results")
+        return results
+
+    @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
+    def _get_domain(self, consulta: str) -> list[dict[str, Any]]:
+        url = f"{self.base_url}/sites/{self.site_id}/domain_discovery/search?" + urlencode(
+            {"q": consulta, "limit": 1}
+        )
+        data = self._get(url).json()
+        if not isinstance(data, list):
+            raise ValueError("resposta do domain_discovery não é uma lista")
+        return data
+
+    def buscar_catalogo(self, consulta: str) -> list[Candidato] | None:
+        """Produtos do catálogo para a consulta, na ordem da busca; None se falhou."""
+        try:
+            results = self._get_search(consulta)
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
+            logger.warning("Falha na busca do catálogo: %s", e)
+            self.errors += 1
+            return None
+        return [
+            Candidato(product_id=r["id"], nome=r["name"], domain_id=r.get("domain_id"))
+            for r in results
+            if r.get("id") and r.get("name")
+        ]
+
+    def dominio_sugerido(self, consulta: str) -> str | None:
+        """Domínio que o ML associa à consulta; None sem sugestão ou se falhou."""
+        try:
+            sugestoes = self._get_domain(consulta)
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
+            logger.warning("Falha no domain_discovery: %s", e)
+            self.errors += 1
+            return None
+        return sugestoes[0].get("domain_id") if sugestoes else None
 
     def _sem_token(self, e: MLAuthError) -> None:
         self.errors += 1

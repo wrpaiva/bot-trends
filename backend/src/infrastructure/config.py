@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     TIKTOK_RESULTS_PER_HASHTAG: int = 10
     TIKTOK_INTERVAL_MIN: int = 120
     APIFY_MAX_REQUESTS_PER_MINUTE: int = 30
+    # Vínculo vídeo → produto do catálogo do ML (TIE-18). Cada vídeo custa uma
+    # chamada ao LLM e duas ao ML, uma vez só. Cobertura mínima das palavras da
+    # consulta no nome do candidato: falso positivo é pior que falso negativo.
+    TIKTOK_ML_LINK_MAX_PER_RUN: int = Field(default=30, ge=1)
+    TIKTOK_ML_MATCH_MIN_SCORE: float = Field(default=0.8, gt=0, le=1)
 
     # Circuit breaker por serviço externo (TIE-37): abre após N falhas
     # consecutivas; depois do cooldown, deixa passar uma tentativa de teste.

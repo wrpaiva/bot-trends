@@ -94,3 +94,42 @@ def parse_llm_content(content: str | dict) -> LLMResult:
             f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors()
         )
         raise LLMResponseError(f"resposta do LLM fora do schema — {problemas}") from None
+
+
+# --- Extração de produto do vídeo (TIE-18) -----------------------------------
+
+MAX_PALAVRAS_CONSULTA = 8
+
+
+class ProductExtraction(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    # Obrigatório, mas pode ser null: compilado não nomeia produto
+    produto: str | None
+
+    @field_validator("produto", mode="before")
+    @classmethod
+    def _vazio_eh_none(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = " ".join(v.split())
+            return v or None
+        return v
+
+    @field_validator("produto")
+    @classmethod
+    def _consulta_curta(cls, v: str | None) -> str | None:
+        if v is not None and len(v.split()) > MAX_PALAVRAS_CONSULTA:
+            raise ValueError(f"consulta com mais de {MAX_PALAVRAS_CONSULTA} palavras")
+        return v
+
+
+def parse_product_extraction(content: str | dict) -> str | None:
+    """Consulta de busca do produto que o vídeo vende, ou None se não nomeia um."""
+    obj = _carrega(content)
+    try:
+        return ProductExtraction.model_validate(obj).produto
+    except ValidationError as e:
+        problemas = "; ".join(
+            f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors()
+        )
+        raise LLMResponseError(f"extração de produto fora do schema — {problemas}") from None

@@ -134,6 +134,7 @@ def _build_input(
             "category": 1,
             "published_at": 1,
             "has_shop_product": 1,
+            "linked_videos": 1,
         },
     )
     if not product:
@@ -159,7 +160,11 @@ def _build_input(
         return None
 
     last = metrics[0]
-    sources = list({m.get("source") for m in metrics if m.get("source")})
+    sources = {m.get("source") for m in metrics if m.get("source")}
+    # Produto do ML vinculado a vídeo do TikTok (TIE-18): as duas fontes
+    if product.get("linked_videos"):
+        sources.add("tiktok")
+    sources = sorted(sources)
 
     sinais = None
     if product.get("published_at"):

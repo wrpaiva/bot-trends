@@ -388,3 +388,81 @@ def test_produto_em_dois_rankings_sai_uma_vez_com_a_primeira_categoria():
     # A repetição nem gasta requisição de detalhe e ofertas
     assert pedidos.count("/products/X") == 1
     assert c.errors == 0
+
+
+# --- Busca no catálogo (TIE-18) ----------------------------------------------
+
+
+def _busca(handler) -> MercadoLivreCollector:
+    c = _collector(handler, categorias=())
+    for fn in (c._get_search, c._get_domain):
+        fn.retry.sleep = lambda *_: None
+    return c
+
+
+def _handler_busca(request: httpx.Request) -> httpx.Response:
+    # Formatos reais de /products/search e /sites/MLB/domain_discovery/search
+    # com token de usuário comum (2026-10-16)
+    if request.url.path == "/products/search":
+        assert request.url.params["site_id"] == "MLB"
+        assert request.url.params["status"] == "active"
+        return httpx.Response(
+            200,
+            json={
+                "paging": {"total": 2},
+                "results": [
+                    {"id": "MLB10", "name": "Porta Temperos Giratório", "domain_id": "MLB-SPICE"},
+                    {"id": "MLB11", "name": "Porta Temperos Madeira"},
+                ],
+            },
+        )
+    if request.url.path == "/sites/MLB/domain_discovery/search":
+        return httpx.Response(
+            200,
+            json=[{"domain_id": "MLB-SPICE", "category_id": "MLB193627", "category_name": "X"}],
+        )
+    return httpx.Response(404)
+
+
+def test_busca_no_catalogo_devolve_candidatos():
+    with _busca(_handler_busca) as c:
+        candidatos = c.buscar_catalogo("porta temperos giratorio")
+
+    assert [(x.product_id, x.nome, x.domain_id) for x in candidatos] == [
+        ("MLB10", "Porta Temperos Giratório", "MLB-SPICE"),
+        ("MLB11", "Porta Temperos Madeira", None),
+    ]
+    assert c.errors == 0
+
+
+def test_dominio_sugerido_vem_do_domain_discovery():
+    with _busca(_handler_busca) as c:
+        assert c.dominio_sugerido("porta temperos giratorio") == "MLB-SPICE"
+        assert c.errors == 0
+
+
+def test_dominio_sugerido_sem_sugestao_eh_none_sem_erro():
+    with _busca(lambda r: httpx.Response(200, json=[])) as c:
+        assert c.dominio_sugerido("xyz abc") is None
+        assert c.errors == 0
+
+
+def test_falha_na_busca_devolve_none_e_conta_erro():
+    with _busca(lambda r: httpx.Response(403, json={"message": "forbidden"})) as c:
+        assert c.buscar_catalogo("porta temperos") is None
+        assert c.dominio_sugerido("porta temperos") is None
+        assert c.errors == 2
+
+
+def test_busca_retenta_erro_transitorio():
+    chamadas = []
+
+    def handler(request):
+        chamadas.append(1)
+        if len(chamadas) == 1:
+            return httpx.Response(503)
+        return _handler_busca(request)
+
+    with _busca(handler) as c:
+        assert len(c.buscar_catalogo("porta temperos")) == 2
+        assert c.errors == 0
