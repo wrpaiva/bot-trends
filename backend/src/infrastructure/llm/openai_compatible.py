@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from typing import TypeVar
 
 import httpx
 
@@ -14,6 +16,8 @@ from src.infrastructure.logging_setup import http_log_hooks
 from src.infrastructure.observability import safe_inc
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class OpenAICompatibleLLMClient(LLMClient):
@@ -54,6 +58,14 @@ class OpenAICompatibleLLMClient(LLMClient):
         logger.info("LLM configurado: modelo=%s base_url=%s", self.model, self.base_url)
 
     def analyze_trend(self, system: str, user: str) -> LLMResult:
+        return self.complete_json(system, user, parse_llm_content)
+
+    def complete_json(self, system: str, user: str, parse: Callable[[str], T]) -> T:
+        """
+        Uma chamada de chat em modo JSON; `parse` valida o conteúdo e levanta
+        `LLMResponseError` fora do contrato. A análise de tendência e a extração
+        de produto (TIE-18) passam por aqui: mesma contagem, log e erro.
+        """
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
@@ -83,7 +95,7 @@ class OpenAICompatibleLLMClient(LLMClient):
         try:
             content = r.json()["choices"][0]["message"]["content"]
             # Validação e clamp dos campos (TIE-24)
-            res = parse_llm_content(content)
+            res = parse(content)
         except (ValueError, KeyError, IndexError, TypeError, LLMResponseError) as e:
             safe_inc("trends_llm_calls_total", {"result": "resposta_invalida"})
             if isinstance(e, LLMResponseError):

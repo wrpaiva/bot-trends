@@ -645,3 +645,16 @@ def test_limiar_passado_na_chamada_vale_para_todas_as_fontes(db, monkeypatch):
     monkeypatch.setattr(mod.settings, "ALERT_THRESHOLD", 101.0)
 
     assert mod.hybrid_trend_analyze(alert_threshold=40.0)["alerts_sent"] == 2
+
+
+def test_produto_do_ml_vinculado_a_video_lista_as_duas_fontes(db):
+    # TIE-18: o vínculo vídeo → catálogo grava `linked_videos` no produto do ML
+    _item_ml(db, "ml_vinc", [5, 8], [None, None])
+    _item_ml(db, "ml_solo", [5, 8], [None, None])
+    db["products"].update_one({"product_id": "ml_vinc"}, {"$set": {"linked_videos": ["p1"]}})
+
+    mod.hybrid_trend_analyze(hours=72)
+
+    fontes = {i["product_id"]: sorted(i["sources"]) for i in db["trend_insights"].find()}
+    assert fontes["ml_vinc"] == ["mercadolivre", "tiktok"]
+    assert fontes["ml_solo"] == ["mercadolivre"]

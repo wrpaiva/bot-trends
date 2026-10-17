@@ -188,7 +188,8 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    na barra — copie a URL pela aba Network do DevTools. **Com token real (2026-10-06):**
    `/highlights` responde 200, mas só com `PRODUCT`/`USER_PRODUCT` (nenhum `ITEM`; `?type=ITEM`
    dá 400), e `/items`, `/items?ids=`, `/sites/MLB/search` e `/user-products` dão **403** a
-   token de usuário comum. Funcionam `/products/{id}` (nome, atributos; `buy_box_winner` veio
+   token de usuário comum. **`/products/search?site_id=MLB&q=` e `/sites/MLB/domain_discovery/search`
+   respondem 200** (2026-10-16) — a busca no catálogo funciona, só a de anúncios não. Funcionam `/products/{id}` (nome, atributos; `buy_box_winner` veio
    `null`) e `/products/{id}/items` (ofertas: preço, vendedor — sem `sold_quantity`); nenhuma
    rota de reviews responde (`/reviews/item` 403 no item, 404 no produto). **Por isso o
    collector parte do catálogo:** `source_product_id` é o id do **produto** (não do anúncio),
@@ -211,7 +212,8 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    vez de um log por produto (eram 393 em 2 h, TIE-49); falta individual (`leitura_unica`) segue
    por produto. Backtest e `prompt_eval` não logam isso. As regras devolvem `Medida(valor, motivo)` (`*_medido`); o log fica na task. E boa parte do topo do ranking é
    conteúdo sem produto (dança, meme de `#fyp`) — resolvido pelo filtro comercial (ver "Já
-   corrigido"); o vínculo TikTok ↔ produto do ML continua pendente (TIE-18).
+   corrigido"); o vínculo TikTok → produto do ML existe desde a TIE-18 (ver "Já corrigido"), mas
+   o sinal social do vídeo ainda não entra no score do ML.
 3. **`MONGO_PASSWORD` só vale na primeira subida do volume.** `MONGO_INITDB_ROOT_PASSWORD` é
    lido apenas quando `/data/db` está vazio. Trocar a senha no `.env` com o volume
    `trends_mongo_data` já existente dá `storedKey mismatch` e o healthcheck nunca fica verde.
@@ -567,6 +569,21 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   Dockerfile cria `/app/beat` antes do `chown`: volume nomeado novo herda o dono do diretório
   da imagem — sem ele nasce root e o beat não grava (o mesmo do backup, armadilha 8). Coberto
   em `test_health.py`. Recriar o container sem o volume (ex.: `down -v`) volta a zerar.
+
+- **TikTok e ML eram dois rankings paralelos** (TIE-18). O vínculo por título entre as bases dava
+  ~0 pares (25 com duas palavras em comum, quase todos falsos): as fontes olham para universos
+  diferentes. Agora `tasks.link_tiktok_ml` (`apps/worker/tasks_link.py`) faz o inverso — o LLM
+  extrai da legenda o produto que o vídeo vende (`LLMProductExtractor`, temperatura 0,
+  `EXTRACTION_PROMPT_VERSION`) e a consulta vai para `/products/search`. **A legenda quase nunca
+  nomeia o produto:** 61 de 72 vídeos são compilado ou "link na bio", e consulta montada por regra
+  casava com livro ("cara milionária"); por isso o LLM, e `null` é a resposta comum. A regra de
+  aceite (`src/domain/product_match.py`) pede cobertura ≥ `TIKTOK_ML_MATCH_MIN_SCORE`, domínio do
+  `domain_discovery` e mesmo público — a 1ª versão ligou cinta feminina a "Cinta Masculina" e um
+  compilado em lista a um dos itens (6/8); com o filtro de público e o exemplo de lista no prompt,
+  7/7. **Mudou o prompt? Suba `EXTRACTION_PROMPT_VERSION`** e reprocesse (status gravado não volta
+  a rodar). Revalide sobre uma **cópia** dos vídeos num banco descartável, com o token lido do banco
+  real — nunca copie `ml_oauth`: o refresh token é de uso único. O sinal social no score do ML é a
+  parte 2.
 
 ---
 

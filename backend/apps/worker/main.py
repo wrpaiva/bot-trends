@@ -33,12 +33,15 @@ celery_app = Celery(
         "apps.worker.tasks",
         "apps.worker.tasks_trend",
         "apps.worker.tasks_health",
+        "apps.worker.tasks_link",
     ],
 )
 
 celery_app.conf.task_routes = {
     "tasks.collect_ml": {"queue": "ml"},
     "tasks.collect_tiktok": {"queue": "tiktok"},
+    # Chama o ML: divide a fila (e o ritmo) com a coleta do ML (TIE-18)
+    "tasks.link_tiktok_ml": {"queue": "ml"},
     "tasks.hybrid_trend_analyze": {"queue": "trend"},
     # Fila padrão: se "trend" encher, o check de fila ainda consegue rodar (TIE-39)
     "tasks.system_health_check": {"queue": "celery"},
@@ -52,6 +55,11 @@ celery_app.conf.beat_schedule = {
     },
     "collect-tiktok": {
         "task": "tasks.collect_tiktok",
+        "schedule": 60 * settings.TIKTOK_INTERVAL_MIN,
+    },
+    # Depois da coleta do TikTok: só vídeo novo ainda sem vínculo (TIE-18)
+    "link-tiktok-ml": {
+        "task": "tasks.link_tiktok_ml",
         "schedule": 60 * settings.TIKTOK_INTERVAL_MIN,
     },
     "trend-analysis-every-30m": {

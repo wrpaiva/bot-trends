@@ -46,7 +46,7 @@ bot-trends/
 ├── backend/                 # Python 3.11 · FastAPI · Celery · MongoDB · Poetry
 │   ├── apps/                # Entrypoints
 │   │   ├── api/             # main.py (app, middlewares) · routes.py (endpoints)
-│   │   ├── worker/          # main.py (Celery + beat) · tasks.py (coleta) · tasks_trend.py (análise)
+│   │   ├── worker/          # main.py (Celery + beat) · tasks.py (coleta) · tasks_trend.py (análise) · tasks_link.py (vínculo TikTok → ML)
 │   │   ├── migrate/         # Runner de migrações
 │   │   └── bootstrap/       # Seed de categorias
 │   └── src/                 # Core (Clean Architecture)
@@ -508,11 +508,34 @@ com 2 a 3 semanas de coleta** antes de mexer nos pesos do ML.
 |---|---|---|
 | `tasks.collect_ml` | `ml` | a cada 6 h |
 | `tasks.collect_tiktok` | `tiktok` | a cada `TIKTOK_INTERVAL_MIN` minutos (default 120) |
+| `tasks.link_tiktok_ml` | `ml` | a cada `TIKTOK_INTERVAL_MIN` minutos — vincula vídeo comercial do TikTok ao produto do catálogo do ML (ver "Vínculo TikTok → ML") |
 | `tasks.hybrid_trend_analyze` | `trend` | a cada 30 min |
 | `tasks.system_health_check` | `celery` | a cada 15 min — alerta em `TELEGRAM_SYSTEM_CHAT_ID` se coleta/análise pararem, o LLM cair no fallback demais, a fila acumular ou o backup falhar |
 
 As tasks de coleta devolvem `status` `ok`, `partial` (alguma requisição falhou) ou `error`
 (nada coletado por falha), junto com `inserted` e `errors`.
+
+### Vínculo TikTok → ML
+
+O ranking do ML e os vídeos do TikTok quase não se cruzam (achadinho da Shopee × top 20 de
+7 categorias), então o vídeo procura o produto: para cada vídeo comercial em português, o LLM
+diz qual produto específico ele vende — ou `null`, para compilado e "link na bio" —, a consulta
+vai para `/products/search` do catálogo e `src/domain/product_match.py` só aceita o candidato com
+≥ `TIKTOK_ML_MATCH_MIN_SCORE` (default 0,8) das palavras da consulta no nome, do domínio que o
+`domain_discovery` sugere e sem público (masculino, infantil...) que a consulta não tenha. Na
+dúvida não vincula: um vínculo errado põe o interesse de um produto em outro.
+
+Cada vídeo é processado uma vez (`ml_match.status`: `vinculado`, `sem_produto`,
+`sem_candidato` com o melhor candidato para auditoria, ou `erro`, que é tentado de novo), até
+`TIKTOK_ML_LINK_MAX_PER_RUN` (default 30) por ciclo — uma chamada ao LLM e duas ao ML por vídeo.
+O produto do ML guarda os vídeos em `linked_videos` e a análise lista `tiktok` nas `sources`
+dele. Produto vinculado que não está no ranking é criado sem métricas: só entra na análise
+quando tiver leitura.
+
+Com os 72 vídeos comerciais em português de setembro (2026-10-16): 7 vinculados, todos certos
+pelo critério "mesmo tipo de produto e mesmo público"; 61 sem produto nomeado; 4 recusados (um
+falso negativo: "descascador elétrico cozinha"). O sinal social do vídeo ainda **não** entra no
+score do ML — fica para quando a coleta do TikTok voltar, com backtest antes e depois.
 
 A análise pontua até `TREND_MAX_PRODUCTS` (default 200) produtos com leitura nas últimas 72 h,
 os de leitura mais recente primeiro (empate desempatado por `product_id`). O que passar do teto

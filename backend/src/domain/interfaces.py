@@ -24,3 +24,12 @@ class LLMCache(ABC):
     @abstractmethod
     def set(self, key: str, value: LLMResult) -> None:
         raise NotImplementedError
+
+
+class ProductExtractor(ABC):
+    """Produto que a legenda de um vídeo vende, como consulta de busca (TIE-18)."""
+
+    @abstractmethod
+    def extract_product(self, caption: str) -> str | None:
+        """Consulta curta (2–8 palavras), ou None se a legenda não nomeia um produto."""
+        raise NotImplementedError
