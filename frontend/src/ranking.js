@@ -32,3 +32,25 @@ export function viewState({ loading, error, items }) {
   if (items && items.length) return "ok";
   return loading ? "loading" : "empty";
 }
+
+// Só a requisição mais nova pode mexer na tela. Sem isso, trocar o período e
+// logo a fonte fazia a resposta antiga, mais lenta, sobrescrever a nova (QA de
+// 2026-10-14), e o "Carregar mais" anexava a página antiga à lista nova.
+// `inicia()` aborta a anterior; quem chama confere `valida()` antes de gravar.
+export function ultimaRequisicao() {
+  let atual = 0;
+  let controle = null;
+  return {
+    inicia() {
+      controle?.abort();
+      controle = new AbortController();
+      const id = ++atual;
+      return { signal: controle.signal, valida: () => id === atual };
+    },
+    cancela() {
+      controle?.abort();
+      controle = null;
+      atual++;
+    },
+  };
+}

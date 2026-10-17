@@ -452,6 +452,11 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   `(window_hours, ts)` na v006). O dashboard ganhou ordenação por coluna, estados explícitos de
   carregando/vazio/erro e mensagens de erro acionáveis (rede/CORS, 401, 429, 5xx com `detail`);
   a lógica fica em `frontend/src/ranking.js` e tem testes vitest (`npm test`, no CI) (TIE-28).
+  **Resposta fora de ordem sobrescrevia o filtro** (QA de 2026-10-14): trocar o período e logo a
+  fonte mostrava "TikTok" com 20 itens do ML, porque a resposta `all`, mais lenta, chegava depois;
+  e "Carregar mais" seguido de troca de filtro anexava a página antiga. Agora `ultimaRequisicao()`
+  aborta a anterior e só a mais nova grava na tela. **Requisição nova na tela usa o mesmo padrão**
+  (o drawer usa `cancelado`). 502/503/504 sem `detail` é o nginx sem API, com dica do que olhar.
 - **Drawer de produto frágil.** Um 404 no insight (produto ainda não analisado) derrubava o
   `Promise.all` e escondia até a curva; métrica ausente (preço no TikTok) era plotada como 0; o
   eixo só tinha `HH:MM` numa janela de 72 h; dados do produto anterior ficavam na tela. Agora

@@ -57,6 +57,30 @@ describe("httpGet", () => {
   });
 });
 
+describe("proxy sem API", () => {
+  // QA 2026-10-14: com a API fora o nginx devolve 502 em HTML e a tela só dizia "HTTP 502"
+  it.each([502, 503, 504])("%i sem detail diz que a API está fora e o que olhar", async (status) => {
+    stubFetch(() => Promise.resolve(new Response("<html>Bad Gateway</html>", { status })));
+    await expect(api.rankingsLatest({ hours: 72, limit: 20, source: "all" })).rejects.toThrow(
+      new RegExp(`${status}.*API não respondeu.*docker compose`, "s")
+    );
+  });
+
+  it("cancelamento chega como AbortError, não como API fora", async () => {
+    stubFetch((_url, opts) =>
+      opts?.signal?.aborted
+        ? Promise.reject(new DOMException("aborted", "AbortError"))
+        : Promise.resolve(new Response("{}", { status: 200 }))
+    );
+    const c = new AbortController();
+    c.abort();
+    await expect(
+      api.rankingsLatest({ hours: 72, limit: 20, source: "all", signal: c.signal })
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch.mock.calls[0][1].signal).toBe(c.signal);
+  });
+});
+
 describe("productInsightLatest", () => {
   it("404 (produto ainda sem análise) vira null, não erro", async () => {
     stubFetch(() => Promise.resolve(new Response(JSON.stringify({ detail: "Insight não encontrado" }), { status: 404 })));
