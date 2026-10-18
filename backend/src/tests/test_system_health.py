@@ -161,6 +161,61 @@ def test_backup_nao_configurado_nao_alerta(db):
     assert not mod.check_backups(db).problem
 
 
+# --- Ofertas do produto vinculado (TIE-54) --------------------------------------
+
+
+def _vinculado(db, pid, *, ofertas_h=None, criado_h=1, videos=("v1",)):
+    doc = {
+        "product_id": pid,
+        "source": "mercadolivre",
+        "linked_videos": list(videos),
+        "created_at": utcnow() - dt.timedelta(hours=criado_h),
+    }
+    if ofertas_h is not None:
+        doc["ml_offers"] = {"ts": utcnow() - dt.timedelta(hours=ofertas_h), "disponivel": True}
+    db["products"].insert_one(doc)
+
+
+def test_ofertas_em_dia(db):
+    _vinculado(db, "a", ofertas_h=2)
+    _vinculado(db, "b", ofertas_h=7)
+    res = mod.check_ml_offers(db)
+    assert not res.problem and "7.0 h" in res.detail
+
+
+def test_ofertas_velhas_sao_problema(db):
+    # Renovação parada: a task só grava `ts` quando lê, então a data envelhece
+    _vinculado(db, "a", ofertas_h=2)
+    _vinculado(db, "b", ofertas_h=30)
+    res = mod.check_ml_offers(db)
+    assert res.problem
+    assert "1 de 2" in res.detail and "30.0 h" in res.detail
+
+
+def test_vinculo_novo_sem_ofertas_tem_o_prazo_de_uma_renovacao(db):
+    # A leitura no vínculo falhou: a renovação de 6 h ainda pode resolver
+    _vinculado(db, "novo", criado_h=3)
+    assert not mod.check_ml_offers(db).problem
+
+
+def test_vinculo_antigo_que_nunca_leu_ofertas_e_problema(db):
+    _vinculado(db, "velho", criado_h=40)
+    res = mod.check_ml_offers(db)
+    assert res.problem and "1 de 1" in res.detail
+
+
+def test_sem_produto_vinculado_nao_alerta(db):
+    _vinculado(db, "sem_video", ofertas_h=100, videos=())
+    res = mod.check_ml_offers(db)
+    assert not res.problem and "nenhum" in res.detail
+
+
+def test_check_de_ofertas_entra_na_rodada(db, task):
+    _vinculado(db, "b", ofertas_h=30)
+    mod.system_health_check()
+    assert any("ofertas_ml" in m for m in task.enviadas)
+
+
 # --- Task ---------------------------------------------------------------------
 
 

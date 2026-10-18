@@ -507,7 +507,8 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   novo ganha seu breaker** e entra em `SERVICES` (TIE-37).
 - **Falha silenciosa do sistema.** `apps/worker/tasks_health.py` roda a cada 15 min (fila
   `celery`) e checa: coleta parada por fonte ativa, análise parada, taxa de fallback do LLM,
-  filas do Celery e backup (collection `backups`). Alertas vão para
+  filas do Celery, backup (collection `backups`) e, desde a TIE-54, as ofertas do produto do ML
+  vinculado a vídeo (`ml_offers.ts` com mais de 12 h; vínculo sem leitura conta da criação). Alertas vão para
   `TELEGRAM_SYSTEM_CHAT_ID` — **separado** do chat de tendências; sem ele, só log `ERROR`. Cada
   check tem cooldown (`HEALTH_ALERT_COOLDOWN_HOURS`) e avisa "✅ normalizado" quando some. No
   primeiro teste contra os dados reais acusou TikTok parado há 64 h, ML nunca coletado e LLM 100%

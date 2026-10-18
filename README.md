@@ -566,7 +566,7 @@ Sem sinal novo, mexer nos pesos do ML só reordena o mesmo ruído.
 | `tasks.link_tiktok_ml` | `ml` | a cada `TIKTOK_INTERVAL_MIN` minutos — vincula vídeo comercial do TikTok ao produto do catálogo do ML (ver "Vínculo TikTok → ML") |
 | `tasks.refresh_ml_offers` | `ml` | a cada 6 h — renova preço, ofertas e link do produto do ML vinculado a vídeo (ver "Vínculo TikTok → ML") |
 | `tasks.hybrid_trend_analyze` | `trend` | a cada 30 min |
-| `tasks.system_health_check` | `celery` | a cada 15 min — alerta em `TELEGRAM_SYSTEM_CHAT_ID` se coleta/análise pararem, o LLM cair no fallback demais, a fila acumular ou o backup falhar |
+| `tasks.system_health_check` | `celery` | a cada 15 min — alerta em `TELEGRAM_SYSTEM_CHAT_ID` se coleta/análise pararem, o LLM cair no fallback demais, a fila acumular, o backup falhar ou as ofertas do produto vinculado a vídeo passarem de 12 h sem renovar (TIE-54) |
 | `tasks.purge_old_data` | `celery` | a cada 24 h — apaga insight com mais de `INSIGHT_RETENTION_DAYS` (90) e métrica com mais de `METRICS_RETENTION_DAYS` (0 = nunca); ver "Retenção" |
 
 As tasks de coleta devolvem `status` `ok`, `partial` (alguma requisição falhou) ou `error`
