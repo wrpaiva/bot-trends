@@ -92,3 +92,38 @@ describe("productInsightLatest", () => {
     await expect(api.productInsightLatest({ productId: "p1" })).rejects.toThrow(/HTTP 500/);
   });
 });
+
+describe("categorias e busca (TIE-45)", () => {
+  it("ranking manda category só quando escolhida", async () => {
+    stubFetch(() => Promise.resolve(new Response("{}", { status: 200 })));
+    await api.rankingsLatest({ hours: 72, limit: 20, source: "all", category: "MLB1618" });
+    await api.rankingsLatest({ hours: 72, limit: 20, source: "all", category: "" });
+    expect(new URL(fetch.mock.calls[0][0], "http://x").searchParams.get("category")).toBe("MLB1618");
+    expect(new URL(fetch.mock.calls[1][0], "http://x").searchParams.has("category")).toBe(false);
+  });
+
+  it("cadastrar categoria faz POST com JSON e sem X-API-Key", async () => {
+    stubFetch(() => Promise.resolve(new Response('{"created": true}', { status: 200 })));
+    await api.addCategory({ mlCategoryId: "MLB1618" });
+    const [url, opts] = fetch.mock.calls[0];
+    expect(url).toBe("/api/categories");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({ ml_category_id: "MLB1618", enabled: true });
+    expect(new Headers(opts.headers).has("X-API-Key")).toBe(false);
+  });
+
+  it("404 do cadastro traz o detail da API", async () => {
+    stubFetch(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ detail: "Categoria MLB9 não existe no ML." }), { status: 404 })
+      )
+    );
+    await expect(api.addCategory({ mlCategoryId: "MLB9" })).rejects.toThrow(/não existe no ML/);
+  });
+
+  it("busca codifica o texto", async () => {
+    stubFetch(() => Promise.resolve(new Response("{}", { status: 200 })));
+    await api.search({ q: "pote & tampa" });
+    expect(new URL(fetch.mock.calls[0][0], "http://x").searchParams.get("q")).toBe("pote & tampa");
+  });
+});
