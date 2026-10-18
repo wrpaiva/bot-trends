@@ -288,6 +288,9 @@ services:
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
       BACKUP_KEEP_MIN: ${BACKUP_KEEP_MIN:-3}
       BACKUP_UPLOAD_CMD: ${BACKUP_UPLOAD_CMD:-}
+      # Teto de cada etapa: sem ele, Mongo fora pendurava o mongodump para sempre
+      BACKUP_DUMP_TIMEOUT_S: ${BACKUP_DUMP_TIMEOUT_S:-1800}
+      BACKUP_UPLOAD_TIMEOUT_S: ${BACKUP_UPLOAD_TIMEOUT_S:-3600}
     volumes:
       - ./infra/backup:/backup:ro
       - ${BACKUP_HOST_DIR:-./backups}:/backups

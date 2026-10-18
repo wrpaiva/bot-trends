@@ -482,7 +482,10 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   confere contagens — em 2026-09-27 restaurou 10.781 documentos com todas as contagens batendo.
   **O `mongodump` 100.x escreve o namespace entre crases** (`` done dumping `trends.metrics` ``):
   a 1ª versão do script assumia sem crase e gerava gabarito vazio — o stub do teste usa o
-  formato real. Destino fora da máquina ainda depende de escolha do usuário (TIE-35).
+  formato real. Destino fora da máquina ainda depende de escolha do usuário (TIE-35). **Com o
+  Mongo inalcançável o `mongodump` pendura para sempre** (QA de 2026-10-14: > 22 min, e o
+  `backup-loop` nunca mais rodava) e ignora SIGTERM: toda chamada externa do `backup.sh` passa
+  por `timeout -k 10` (o KILL é o que encerra o dump). **Comando novo no script ganha teto.**
 - **O score media popularidade, não tendência.** `views_24h`/`engagement_24h` eram o TOTAL
   acumulado do vídeo (o nome "24h" é histórico e ficou), `social_velocity` era 0 em 84% dos
   insights e o preço ausente dava 10 pontos de graça: o topo era um vídeo de 4 anos. Agora
