@@ -196,8 +196,11 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    `catalog_product_id` 403, `/reviews/product`, `/reviews/catalog_product` e `/items/{id}/reviews`
    404, `/products/{id}/reviews` 500, `/items/{id}/visits` e `/items/visits` 403 (visita é só do
    próprio anúncio); nenhum campo de nota em `/products/{id}` nem nas ofertas. Respondem 200:
-   `/users/{seller_id}` (reputação do vendedor) e `/trends/MLB[/{categoria}]` (termos mais
-   buscados — sinal de demanda ainda não usado). Não tente de novo sem mudar o app/escopo. **Por isso o
+   `/users/{seller_id}` (reputação do vendedor) e `/trends/MLB[/{categoria}]` (50 termos mais
+   buscados, em ordem, sem volume). **`/trends` não serve de sinal por produto** (2026-10-18): só
+   6 dos 85 produtos do ranking têm no título um termo em alta da própria categoria (4 com o mesmo
+   termo genérico). O `/highlights` devolve **exatamente 20** itens por categoria: não há "além do
+   top 20" por ele. Não tente de novo sem mudar o app/escopo. **Por isso o
    collector parte do catálogo:** `source_product_id` é o id do **produto** (não do anúncio),
    preço = buy box ou menor oferta, `category` = categoria do ranking, `USER_PRODUCT` fica de
    fora sem contar erro. Validado em 2026-10-06 com `MLB1051`: 18 produtos, 0 erros (2 `USER_PRODUCT` de fora). A menor oferta pode ser anúncio fora da curva (fone a R$ 10). O refresh token é de **uso único**: nunca renove
@@ -613,7 +616,9 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   independentes; não troque por bootstrap de cortes, que encolhe o intervalo à toa. Resultado: a
   perda para a posição não é sorte (prec@5 −0,33 [−0,43, −0,22]), o empate em quem sobe também não
   muda, e subida de 10+ posições no top 20 é rara (2 em 12 dias). **Não mexa nos pesos do ML
-  esperando ganho**: o score só agrega com um sinal que a posição não tem (README, "Backtest").
+  esperando ganho**: o score só agrega com um sinal que a posição não tem — e o único que sobrou é
+  o vínculo com o TikTok (TIE-18, parte 2; `/trends` e "além do top 20" foram medidos e não
+  servem, armadilha 1).
 - **Recriar o beat atrasava toda task agendada pelo intervalo inteiro.** O `celerybeat-schedule`
   ficava na camada do container: todo `up -d --build` o zerava, e o Celery conta o intervalo a
   partir da subida — o `collect_ml` (6 h) ficava até 6 h sem rodar a cada deploy (visto em
