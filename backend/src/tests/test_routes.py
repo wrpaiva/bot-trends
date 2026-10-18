@@ -296,6 +296,59 @@ def test_cursor_invalido_da_400(client, rota, cursor):
     assert client.get(rota, params={"cursor": cursor}).status_code == 400
 
 
+def _cursor(**campos) -> str:
+    from apps.api.pagination import encode_cursor
+
+    return encode_cursor(**campos)
+
+
+# QA da TIE-32 (2026-10-14): tipo errado dava 500 (OverflowError do Mongo) ou
+# 200 com página errada; `ObjectId(None)` gera um id novo em vez de falhar
+@pytest.mark.parametrize(
+    "campos",
+    [
+        {"s": 2**63, "p": "p1"},
+        {"s": 10**30, "p": "p1"},
+        {"s": 10**100, "p": "p1"},  # 10**400 nem passa no max_length (422)
+        {"s": "50", "p": "p1"},
+        {"s": True, "p": "p1"},
+        {"s": None, "p": "p1"},
+        {"s": [1], "p": "p1"},
+        {"s": {"$gt": 0}, "p": "p1"},
+        {"s": 50.0, "p": 7},
+        {"s": 50.0, "p": None},
+        {"s": 50.0, "p": {"$ne": ""}},
+    ],
+)
+def test_cursor_do_ranking_com_tipo_errado_da_400(client, db, campos):
+    db["trend_insights"].insert_many([_insight(f"p{i}", 50 + i) for i in range(3)])
+    r = client.get("/rankings/latest", params={"cursor": _cursor(kind="rankings", **campos)})
+    assert r.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "campos",
+    [
+        {"ts": "2026-10-14T00:00:00+00:00", "id": None},
+        {"ts": "2026-10-14T00:00:00+00:00", "id": 12},
+        {"ts": 1760400000, "id": "6720c8a1b2c3d4e5f6a7b8c9"},
+        {"ts": None, "id": "6720c8a1b2c3d4e5f6a7b8c9"},
+    ],
+)
+def test_cursor_de_insights_com_tipo_errado_da_400(client, db, campos):
+    db["trend_insights"].insert_many([_insight(f"p{i}", 50 + i) for i in range(3)])
+    r = client.get("/insights/latest", params={"cursor": _cursor(kind="insights", **campos)})
+    assert r.status_code == 400
+
+
+def test_cursor_com_score_inteiro_continua_valendo(client, db):
+    # Score gravado como int (ex.: 50) é número válido, não tipo errado
+    db["trend_insights"].insert_many([_insight(f"p{i}", 50 + i) for i in range(3)])
+    r = client.get("/rankings/latest", params={"cursor": _cursor(kind="rankings", s=51, p="p1")})
+    assert r.status_code == 200
+    assert [i["product_id"] for i in r.json()["items"]] == ["p0"]
+
+
 def test_cursor_do_ranking_nao_serve_para_insights(client, db):
     db["trend_insights"].insert_many([_insight(f"p{i}", 50 + i) for i in range(3)])
     cursor = client.get("/rankings/latest", params={"limit": 1}).json()["next_cursor"]
