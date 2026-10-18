@@ -13,6 +13,7 @@ import os
 import pathlib
 import stat
 import subprocess
+import time
 
 import pytest
 
@@ -44,6 +45,8 @@ def ambiente(tmp_path):
         bindir,
         "mongodump",
         r"""
+# Mongo inalcançável: o mongodump real fica pendurado (QA de 2026-10-14, > 22 min)
+[ -n "$DUMP_TRAVA" ] && exec sleep 300
 if [ -n "$DUMP_FALHA" ]; then
   echo "Failed: error connecting to db server: server selection timeout ($MONGO_URI)" >&2
   exit 1
@@ -56,8 +59,8 @@ echo "2026-09-27T22:16:28.311+0000	done dumping \`trends.metrics\` (5 documents)
 echo "2026-09-27T22:16:28.311+0000	done dumping \`trends.products\` (2 documents)" >&2
 """,
     )
-    # mongosh: só registra o que mandaram gravar
-    _stub(bindir, "mongosh", f'echo "$@" >> "{log}"\n')
+    # mongosh: só registra o que mandaram gravar (e trava junto, se pedido)
+    _stub(bindir, "mongosh", f'echo "$@" >> "{log}"\n[ -n "$MONGOSH_TRAVA" ] && exec sleep 300\n')
 
     env = {
         **os.environ,
@@ -113,6 +116,44 @@ def test_falha_no_dump_registra_failed_sem_vazar_senha(ambiente):
     erro_gravado = registro.split("error: '", 1)[1]
     assert SENHA not in erro_gravado and "***@" in erro_gravado
     assert SENHA not in r.stdout + r.stderr
+
+
+def test_dump_travado_estoura_o_timeout_e_registra_failed(ambiente):
+    # QA de 2026-10-14: com o Mongo fora, o mongodump não terminava e o
+    # backup-loop ficava preso para sempre, sem registro `failed`
+    inicio = time.monotonic()
+    r = _roda(BACKUP, ambiente, DUMP_TRAVA="1", BACKUP_DUMP_TIMEOUT_S="1")
+
+    assert time.monotonic() - inicio < 20
+    assert r.returncode != 0
+    assert "tempo esgotado" in r.stdout
+    registro = ambiente["log"].read_text()
+    assert "status: 'failed'" in registro and "tempo esgotado" in registro
+    assert not [n for n in _arquivos(ambiente) if n.endswith(".tmp")]
+
+
+def test_registro_travado_nao_prende_o_ciclo(ambiente):
+    # Mongo fora também pendura o mongosh que grava o registro `failed`
+    inicio = time.monotonic()
+    r = _roda(
+        BACKUP,
+        ambiente,
+        DUMP_TRAVA="1",
+        MONGOSH_TRAVA="1",
+        BACKUP_DUMP_TIMEOUT_S="1",
+        BACKUP_RECORD_TIMEOUT_S="1",
+    )
+    assert time.monotonic() - inicio < 20
+    assert r.returncode != 0
+    assert "não foi possível gravar o registro" in r.stdout
+
+
+def test_upload_travado_estoura_o_timeout(ambiente):
+    inicio = time.monotonic()
+    r = _roda(BACKUP, ambiente, BACKUP_UPLOAD_CMD="exec sleep 300", BACKUP_UPLOAD_TIMEOUT_S="1")
+    assert time.monotonic() - inicio < 20
+    assert r.returncode != 0
+    assert "status: 'failed'" in ambiente["log"].read_text()
 
 
 def test_upload_que_falha_marca_backup_como_failed(ambiente):
