@@ -114,7 +114,7 @@ def rankings_latest(
         {"$replaceRoot": {"newRoot": "$doc"}},
     ]
     if cursor:
-        c = decode_cursor(cursor, "rankings", ("s", "p"))
+        c = decode_cursor(cursor, "rankings", {"s": float, "p": str})
         # Depois do último item: score menor, ou mesmo score e product_id maior
         pipeline.append(
             {
@@ -193,7 +193,7 @@ def insights_latest(
     if window_hours is not None:
         filtro["window_hours"] = window_hours
     if cursor:
-        c = decode_cursor(cursor, "insights", ("ts", "id"))
+        c = decode_cursor(cursor, "insights", {"ts": str, "id": str})
         try:
             ts, oid = dt.datetime.fromisoformat(c["ts"]), ObjectId(c["id"])
         except (TypeError, ValueError, InvalidId):

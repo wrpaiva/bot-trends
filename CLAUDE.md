@@ -445,7 +445,11 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   cursor opaco (`apps/api/pagination.py`), com desempate estável (`product_id` no ranking, `_id`
   nos insights) para não repetir nem pular item entre páginas. Índice `(window_hours, ts)` em
   `trend_insights` (migração `v006`), conferido com `explain()` no Mongo real. O dashboard tem
-  "Carregar mais" (TIE-32).
+  "Carregar mais" (TIE-32). **O cursor confere o tipo de cada campo** (`decode_cursor(raw, kind,
+  {"s": float, "p": str})`): o valor vai direto para `$lt`/`$gt`, e `s = 2**63` dava 500
+  (`OverflowError`), tipo errado dava 200 com página errada e `ObjectId(None)` gera id novo em vez
+  de falhar. A `v008` troca os índices por `(ts, _id)` e `(window_hours, ts, _id)` — o sort das
+  listagens não cabia nos da v006 e ordenava a janela inteira em memória (TIE-50).
 - **Filtro de período do dashboard sempre vazio fora de 72 h.** A API exigia
   `window_hours == hours`, mas o beat analisa sempre com janela de 72 h — 24/48/168 h davam lista
   vazia. Agora `hours` é só recência e `window_hours` é filtro opcional explícito (índices `ts` e
