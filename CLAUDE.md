@@ -263,7 +263,9 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    bind mount como `root`, e o serviço `backup` roda como `BACKUP_UID` (1000): todo ciclo falha
    com `permission denied` no `mongodump`. Aconteceu em 2026-09-28 e passou 3 dias sem ninguém
    ver — o check de saúde detectou, mas sem `TELEGRAM_SYSTEM_CHAT_ID` o alerta só vai para o
-   log. Crie a pasta antes do primeiro `up`. Sem sudo, devolva o dono com
+   log. Desde a TIE-33 a pasta vem no clone (`backups/.gitkeep`, com o dono de quem clonou) —
+   reproduzido num Docker limpo em 2026-10-18: sem ela, o primeiro ciclo já falha. Mudou
+   `BACKUP_HOST_DIR` ou apagou a pasta? Crie antes do primeiro `up`. Sem sudo, devolva o dono com
    `docker run --rm -v "$PWD/backups:/b" mongo:7 chown 1000:1000 /b` e rode um ciclo com
    `docker compose exec backup bash /backup/backup.sh`. Corrigido assim em 2026-10-01 (dump de
    11.505 documentos, `restore_test.sh` com todas as contagens batendo).
@@ -394,6 +396,11 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   com stemming em português (migração `v005` — **rode `apps.migrate.main` em quem já está no ar**,
   sem o índice a rota devolve 503), ordenado por relevância, paginado (`page`, `limit` ≤ 50) e
   com o último score de cada produto (TIE-30).
+- **Instalação nova com credencial de mentira** (TIE-33, roteiro do README seguido num Docker
+  limpo em 2026-10-18). O `backend/.env.example` trazia `APIFY_TOKEN`, `LLM_API_KEY` e
+  `TELEGRAM_*` = `xxxx`: o sistema os via como preenchidos — 401 a cada ciclo e 3 problemas no
+  check de saúde. **Credencial no exemplo fica vazia** (vazio = desligado). Sem `APIFY_TOKEN` a
+  `collect_tiktok` devolve `status: error` com `reason`, como a do ML, em vez de traceback.
 - **READMEs desatualizados e duplicados.** O `backend/README.md` era cópia do da raiz e os dois
   mentiam (fórmula de score, filas, schemas, "rollback", `/search` inexistente). Agora o da raiz
   é a referência, o do backend cobre só desenvolvimento e o do frontend explica o build.

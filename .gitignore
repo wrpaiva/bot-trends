@@ -73,7 +73,10 @@ redis_data/
 Thumbs.db
 
 # Backups do Mongo (TIE-35): dados de produção, nunca no git
-/backups/
+/backups/*
+# A pasta vem no clone com o dono de quem clonou: criada pelo Docker, nasce root
+# e o backup falha com permission denied (armadilha 8, TIE-33)
+!/backups/.gitkeep
 
 # Rótulos humanos da avaliação do prompt (TIE-26) — dado local, não vai para o git
 avaliacao/
