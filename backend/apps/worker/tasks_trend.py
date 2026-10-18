@@ -296,6 +296,8 @@ def hybrid_trend_analyze(
     alert_repo = AlertStateRepo(db)
     cooldown = dt.timedelta(hours=settings.ALERT_COOLDOWN_HOURS)
     alertas = {"alerts_sent": 0, "alerts_suppressed": 0, "alerts_failed": 0}
+    # Insight repetido confirma o anterior em vez de gravar outro (TIE-47)
+    gravados = {"inserted": 0, "confirmed": 0}
 
     since = utcnow() - dt.timedelta(hours=hours)
     window_from = since
@@ -348,8 +350,9 @@ def hybrid_trend_analyze(
         product_id = ti.product_id
         result = engine.run(ti, contexto.normalize(ti) if contexto else None)
 
-        insight_repo.insert(
+        gravacao = insight_repo.record(
             product_id=product_id,
+            dedupe=settings.INSIGHT_DEDUPE,
             window_from=window_from,
             window_to=window_to,
             window_hours=hours,
@@ -383,6 +386,7 @@ def hybrid_trend_analyze(
                 "prompt_version": result.debug.get("prompt_version"),
             },
         )
+        gravados[gravacao] += 1
 
         if notifier is None:
             continue
@@ -450,6 +454,8 @@ def hybrid_trend_analyze(
         "skipped_too_old": velhos,
         "skipped_no_product": sem_produto,
         **alertas,
+        "insights_inserted": gravados["inserted"],
+        "insights_confirmed": gravados["confirmed"],
         "llm_cache_hits": engine.cache_hits,
         "llm_cache_misses": engine.cache_misses,
     }

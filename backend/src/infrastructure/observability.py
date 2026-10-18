@@ -334,7 +334,7 @@ def _mongo_samples(db, now: dt.datetime) -> list[Sample]:
         Sample(
             "trends_insights_24h",
             db["trend_insights"].count_documents({"ts": {"$gte": now - dt.timedelta(hours=24)}}),
-            help="Insights gravados nas últimas 24 h",
+            help="Insights vigentes nas últimas 24 h (gravados ou confirmados, TIE-47)",
         )
     )
 

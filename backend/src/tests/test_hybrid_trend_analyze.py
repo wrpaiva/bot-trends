@@ -84,7 +84,8 @@ def test_alerta_uma_vez_por_produto_e_suprime_repeticao(db):
     assert len(_Telegram.enviados) == 2  # um por produto, só na primeira rodada
     assert primeira["alerts_sent"] == 2
     assert segunda["alerts_sent"] == 0 and segunda["alerts_suppressed"] == 2
-    assert db["trend_insights"].count_documents({}) == 4
+    # A segunda rodada repete a primeira: confirma os 2 insights (TIE-47)
+    assert db["trend_insights"].count_documents({}) == 2
 
 
 def test_estado_persistido_no_mongo(db):
@@ -658,3 +659,35 @@ def test_produto_do_ml_vinculado_a_video_lista_as_duas_fontes(db):
     fontes = {i["product_id"]: sorted(i["sources"]) for i in db["trend_insights"].find()}
     assert fontes["ml_vinc"] == ["mercadolivre", "tiktok"]
     assert fontes["ml_solo"] == ["mercadolivre"]
+
+
+# --- Insight repetido (TIE-47) ------------------------------------------------
+
+
+def test_segunda_rodada_igual_confirma_o_insight_em_vez_de_gravar_outro(db):
+    primeira = mod.hybrid_trend_analyze()
+    antes = {d["product_id"]: d for d in db["trend_insights"].find()}
+    segunda = mod.hybrid_trend_analyze()
+
+    assert (primeira["insights_inserted"], primeira["insights_confirmed"]) == (2, 0)
+    assert (segunda["insights_inserted"], segunda["insights_confirmed"]) == (0, 2)
+    assert db["trend_insights"].count_documents({}) == 2
+    for d in db["trend_insights"].find():
+        assert d["confirmations"] == 1
+        assert d["first_ts"] == antes[d["product_id"]]["ts"]
+        assert d["ts"] >= antes[d["product_id"]]["ts"]
+
+
+def test_resultado_novo_grava_outro_insight(db):
+    mod.hybrid_trend_analyze()
+    _LLM.classificacao = "VIRALIZANDO"
+    res = mod.hybrid_trend_analyze()
+    assert res["insights_inserted"] == 2
+    assert db["trend_insights"].count_documents({}) == 4
+
+
+def test_dedupe_desligado_pela_config_grava_sempre(db, monkeypatch):
+    monkeypatch.setattr(mod.settings, "INSIGHT_DEDUPE", False)
+    mod.hybrid_trend_analyze()
+    mod.hybrid_trend_analyze()
+    assert db["trend_insights"].count_documents({}) == 4

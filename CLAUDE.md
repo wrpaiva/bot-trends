@@ -461,6 +461,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   e "Carregar mais" seguido de troca de filtro anexava a página antiga. Agora `ultimaRequisicao()`
   aborta a anterior e só a mais nova grava na tela. **Requisição nova na tela usa o mesmo padrão**
   (o drawer usa `cancelado`). 502/503/504 sem `detail` é o nginx sem API, com dica do que olhar.
+- **Insight repetido a cada 30 min e nenhuma retenção** (TIE-47). 94% dos insights repetiam o
+  anterior do produto (50 dos 51 MB do banco). `TrendInsightRepo.record` confirma o anterior
+  quando `insight_dedupe.repete` (`ts` avança, `first_ts` fica, `confirmations` conta) e a v009
+  compactou o histórico. **"Insight mais recente por `ts`" continua valendo**, mas
+  `count_documents` de insights deixou de contar análises — conte `confirmations`. **Campo novo
+  que muda a decisão entra em `CAMPOS_DA_CHAVE`**, senão a mudança vira confirmação silenciosa.
+  Expurgo diário `tasks.purge_old_data` (`INSIGHT_RETENTION_DAYS`=90); `metrics` não expira
+  por padrão porque o backtest lê a série inteira.
 - **Categoria só por `curl` e Mongo, e ranking com `MLB1618` no lugar do nome** (TIE-45). O
   dashboard tem a aba **Categorias** (habilita/desabilita e cadastra subcategoria pelo ID), o
   ranking filtra por `category` e traz `category_name`, e a busca usa o `GET /search`.

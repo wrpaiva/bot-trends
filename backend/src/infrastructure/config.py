@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     HEALTH_QUEUE_MAX: int = Field(default=100, ge=1)
     HEALTH_BACKUP_MAX_AGE_HOURS: int = Field(default=26, ge=1)
 
+    # Retenção (TIE-47). Insight repetido confirma o anterior em vez de gravar
+    # outro; o expurgo diário apaga o que passou do prazo (0 = nunca). As
+    # métricas ficam para sempre por padrão: o backtest lê a série inteira.
+    INSIGHT_DEDUPE: bool = True
+    INSIGHT_RETENTION_DAYS: int = Field(default=90, ge=0)
+    METRICS_RETENTION_DAYS: int = Field(default=0, ge=0)
+
     # Alertas (TIE-31): score mínimo e intervalo entre alertas do mesmo produto.
     # Por fonte desde a TIE-43 (replay de 2026-10-13, README "Alertas"): o
     # numérico do vídeo tem outra escala. ALERT_THRESHOLD vale para o ML e para

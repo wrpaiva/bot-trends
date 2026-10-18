@@ -104,3 +104,71 @@ def test_trendinsightrepo_inserts_window_fields():
     assert doc["window_from"] == _ms(window_from)
     assert doc["window_to"] == _ms(window_to)
     assert doc["final_score"] == 74.0
+
+
+def _payload(**kw):
+    return {
+        "numeric_score": 70.0,
+        "llm_score": 80.0,
+        "final_score": 74.0,
+        "trend_classification": "SUBINDO",
+        "risk_level": "MEDIO",
+        "analysis": "x",
+        "recommendation": "y",
+        "sources": ["tiktok"],
+        "debug": {},
+    } | kw
+
+
+def _record(repo, payload, **kw):
+    agora = utcnow()
+    return repo.record(
+        "uuid-1",
+        payload,
+        window_from=agora - dt.timedelta(hours=72),
+        window_to=agora,
+        window_hours=72,
+        **kw,
+    )
+
+
+def test_record_confirma_insight_repetido_e_atualiza_o_texto():
+    db = mongomock.MongoClient(tz_aware=True)["testdb"]
+    repo = TrendInsightRepo(db)
+
+    assert _record(repo, _payload()) == "inserted"
+    primeiro = db["trend_insights"].find_one()
+    assert _record(repo, _payload(analysis="texto novo")) == "confirmed"
+
+    (doc,) = list(db["trend_insights"].find())
+    assert doc["first_ts"] == primeiro["ts"]
+    assert doc["ts"] >= primeiro["ts"]
+    assert (doc["confirmations"], doc["analysis"]) == (1, "texto novo")
+
+
+def test_record_grava_outro_quando_o_resultado_muda():
+    db = mongomock.MongoClient(tz_aware=True)["testdb"]
+    repo = TrendInsightRepo(db)
+    _record(repo, _payload())
+    assert _record(repo, _payload(final_score=75.0)) == "inserted"
+    assert db["trend_insights"].count_documents({}) == 2
+
+
+def test_record_sem_dedupe_grava_sempre():
+    db = mongomock.MongoClient(tz_aware=True)["testdb"]
+    repo = TrendInsightRepo(db)
+    _record(repo, _payload())
+    assert _record(repo, _payload(), dedupe=False) == "inserted"
+    assert db["trend_insights"].count_documents({}) == 2
+
+
+def test_record_confirma_insight_antigo_sem_first_ts():
+    # Insight gravado antes da TIE-47: first_ts passa a ser o ts dele
+    db = mongomock.MongoClient(tz_aware=True)["testdb"]
+    repo = TrendInsightRepo(db)
+    antigo = utcnow().replace(microsecond=0) - dt.timedelta(hours=1)
+    db["trend_insights"].insert_one(
+        {"product_id": "uuid-1", "ts": antigo, "window_hours": 72, **_payload()}
+    )
+    assert _record(repo, _payload()) == "confirmed"
+    assert db["trend_insights"].find_one()["first_ts"] == antigo
