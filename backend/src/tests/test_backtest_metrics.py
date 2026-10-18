@@ -3,7 +3,14 @@
 
 import pytest
 
-from src.domain.backtest import acerto_top_k, precision_at_k, spearman, summarize
+from src.domain.backtest import (
+    acerto_top_k,
+    auc,
+    ic_bootstrap_por_bloco,
+    precision_at_k,
+    spearman,
+    summarize,
+)
 
 
 def test_spearman_ordem_identica_e_inversa():
@@ -75,3 +82,64 @@ def test_acerto_top_k_desempata_o_previsto_pelo_id():
 def test_acerto_top_k_sem_ids_em_comum_falha():
     with pytest.raises(ValueError):
         acerto_top_k({"a": 1}, {"b": 1}, k=1)
+
+
+# --- AUC (desfecho raro, TIE-23) ------------------------------------------------
+
+
+def test_auc_separacao_perfeita_e_invertida():
+    assert auc([9, 8, 1, 0], [1, 1, 0, 0]) == pytest.approx(1.0)
+    assert auc([0, 1, 8, 9], [1, 1, 0, 0]) == pytest.approx(0.0)
+
+
+def test_auc_empate_vale_meio():
+    # Preditor constante não separa nada
+    assert auc([5, 5, 5, 5], [1, 0, 0, 1]) == pytest.approx(0.5)
+
+
+def test_auc_conta_pares_positivo_negativo():
+    # Pares (pos, neg): (3,1) ok, (3,4) erro, (2,1) ok, (2,4) erro → 2/4
+    assert auc([3, 2, 1, 4], [1, 1, 0, 0]) == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("desfecho", [[1, 1, 1], [0, 0, 0], []])
+def test_auc_sem_as_duas_classes_e_none(desfecho):
+    assert auc([1, 2, 3][: len(desfecho)], desfecho) is None
+
+
+def test_auc_exige_listas_do_mesmo_tamanho():
+    with pytest.raises(ValueError):
+        auc([1, 2, 3], [1, 0])
+
+
+# --- intervalo de confiança por bloco (dia) -------------------------------------
+
+
+def test_ic_por_bloco_usa_a_media_de_cada_bloco():
+    # O dia com 3 cortes não pesa 3×: cada dia vira uma média
+    r = ic_bootstrap_por_bloco({"d1": [1.0, 1.0, 1.0], "d2": [3.0]}, reps=500, seed=1)
+    assert r["media"] == pytest.approx(2.0)
+    assert r["blocos"] == 2
+    assert 1.0 <= r["ic_inf"] <= r["media"] <= r["ic_sup"] <= 3.0
+
+
+def test_ic_de_diferenca_consistente_nao_cruza_o_zero():
+    blocos = {f"d{i}": [-0.25 + 0.01 * (i % 3)] for i in range(12)}
+    r = ic_bootstrap_por_bloco(blocos, reps=1000, seed=7)
+    assert r["ic_sup"] < 0
+
+
+def test_ic_de_ruido_em_torno_de_zero_cruza_o_zero():
+    blocos = {f"d{i}": [(-1) ** i * 0.3] for i in range(12)}
+    r = ic_bootstrap_por_bloco(blocos, reps=1000, seed=7)
+    assert r["ic_inf"] < 0 < r["ic_sup"]
+
+
+def test_ic_e_deterministico_com_a_mesma_semente():
+    blocos = {"a": [0.1], "b": [0.5], "c": [0.9]}
+    assert ic_bootstrap_por_bloco(blocos, seed=3) == ic_bootstrap_por_bloco(blocos, seed=3)
+
+
+def test_ic_com_menos_de_dois_blocos_e_none():
+    assert ic_bootstrap_por_bloco({"d1": [0.2, 0.4]}) is None
+    assert ic_bootstrap_por_bloco({"d1": [], "d2": [0.1]}) is None
