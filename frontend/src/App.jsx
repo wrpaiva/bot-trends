@@ -4,11 +4,68 @@ import { sortItems, ultimaRequisicao } from "./ranking.js";
 import Filters from "./components/Filters.jsx";
 import RankingTable from "./components/RankingTable.jsx";
 import ProductDrawer from "./components/ProductDrawer.jsx";
+import CategoriesPanel from "./components/CategoriesPanel.jsx";
+import SearchResults from "./components/SearchResults.jsx";
 
 export default function App() {
   const [hours, setHours] = useState(72);
   const [source, setSource] = useState("all"); // all|mercadolivre|tiktok
   const [limit, setLimit] = useState(20);
+  const [category, setCategory] = useState(""); // "" = todas (TIE-45)
+  const [aba, setAba] = useState("ranking"); // ranking|categorias
+
+  // Categorias: alimentam o filtro e a aba de categorias
+  const [categorias, setCategorias] = useState([]);
+  const [catCarregando, setCatCarregando] = useState(false);
+  const [catErro, setCatErro] = useState("");
+  async function carregaCategorias() {
+    setCatCarregando(true);
+    setCatErro("");
+    try {
+      setCategorias((await api.categories()).items || []);
+    } catch (e) {
+      setCatErro(e.message || "Erro ao carregar categorias");
+    } finally {
+      setCatCarregando(false);
+    }
+  }
+  useEffect(() => {
+    carregaCategorias();
+  }, []);
+
+  // Busca por título (GET /search): só a mais nova grava, como no ranking
+  const [busca, setBusca] = useState("");
+  const [resultado, setResultado] = useState(null);
+  const [buscando, setBuscando] = useState(false);
+  const [buscaErro, setBuscaErro] = useState("");
+  const buscas = useRef(null);
+  if (buscas.current === null) buscas.current = ultimaRequisicao();
+  async function buscar(page = 1) {
+    const q = busca.trim();
+    if (q.length < 2) {
+      setBuscaErro("Digite ao menos 2 letras para buscar.");
+      setResultado(null);
+      return;
+    }
+    const req = buscas.current.inicia();
+    setBuscando(true);
+    setBuscaErro("");
+    try {
+      const data = await api.search({ q, page, signal: req.signal });
+      if (req.valida()) setResultado(data);
+    } catch (e) {
+      if (req.valida()) setBuscaErro(e.message || "Erro na busca");
+    } finally {
+      if (req.valida()) setBuscando(false);
+    }
+  }
+  function limparBusca() {
+    buscas.current.cancela();
+    setBusca("");
+    setResultado(null);
+    setBuscaErro("");
+    setBuscando(false);
+  }
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -25,7 +82,7 @@ export default function App() {
     setSort((s) => (s.key === key ? { key, dir: s.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
   }
 
-  const params = useMemo(() => ({ hours, limit, source }), [hours, limit, source]);
+  const params = useMemo(() => ({ hours, limit, source, category }), [hours, limit, source, category]);
 
   // Só a requisição mais nova grava na tela (ver ultimaRequisicao)
   const requisicoes = useRef(null);
@@ -58,9 +115,32 @@ export default function App() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hours, limit, source]);
+  }, [hours, limit, source, category]);
 
-  useEffect(() => () => requisicoes.current.cancela(), []);
+  useEffect(
+    () => () => {
+      requisicoes.current.cancela();
+      buscas.current.cancela();
+    },
+    []
+  );
+
+  const abaBotao = (id, rotulo) => (
+    <button
+      onClick={() => setAba(id)}
+      aria-pressed={aba === id}
+      style={{
+        padding: "8px 14px",
+        cursor: "pointer",
+        border: "1px solid #ddd",
+        borderBottom: aba === id ? "2px solid #1c7ed6" : "1px solid #ddd",
+        background: aba === id ? "#fff" : "#f8f9fa",
+        fontWeight: aba === id ? 600 : 400,
+      }}
+    >
+      {rotulo}
+    </button>
+  );
 
   return (
     <div style={{ fontFamily: "system-ui", padding: 16, maxWidth: 1200, margin: "0 auto" }}>
@@ -71,12 +151,58 @@ export default function App() {
             Ranking por janela (hours) com score híbrido (numérico + IA)
           </div>
         </div>
-        <button onClick={() => load()} disabled={loading} style={{ padding: "10px 14px", cursor: "pointer" }}>
-          {loading ? "Atualizando..." : "Atualizar"}
-        </button>
+        {aba === "ranking" && (
+          <button onClick={() => load()} disabled={loading} style={{ padding: "10px 14px", cursor: "pointer" }}>
+            {loading ? "Atualizando..." : "Atualizar"}
+          </button>
+        )}
       </header>
 
+      <nav style={{ marginTop: 16, display: "flex", gap: 4 }}>
+        {abaBotao("ranking", "Ranking")}
+        {abaBotao("categorias", "Categorias")}
+      </nav>
+
+      {aba === "categorias" && (
+        <section style={{ marginTop: 16 }}>
+          <CategoriesPanel
+            categorias={categorias}
+            carregando={catCarregando}
+            erro={catErro}
+            onChange={carregaCategorias}
+          />
+        </section>
+      )}
+
+      {aba === "ranking" && (
+      <>
       <section style={{ marginTop: 16 }}>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            buscar(1);
+          }}
+          style={{ display: "flex", gap: 8, marginBottom: 12 }}
+        >
+          <input
+            type="search"
+            placeholder="Buscar produto pelo título (ex.: garrafa térmica)"
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            style={{ padding: 8, flex: 1, maxWidth: 480 }}
+          />
+          <button type="submit" disabled={buscando} style={{ padding: "8px 14px", cursor: "pointer" }}>
+            Buscar
+          </button>
+        </form>
+        <SearchResults
+          resultado={resultado}
+          carregando={buscando}
+          erro={buscaErro}
+          onSelectProduct={(pid) => setSelectedProductId(pid)}
+          onLimpar={limparBusca}
+          onPagina={(p) => buscar(p)}
+        />
         <Filters
           hours={hours}
           setHours={setHours}
@@ -84,6 +210,9 @@ export default function App() {
           setSource={setSource}
           limit={limit}
           setLimit={setLimit}
+          category={category}
+          setCategory={setCategory}
+          categorias={categorias}
         />
       </section>
 
@@ -109,6 +238,8 @@ export default function App() {
           </div>
         )}
       </section>
+      </>
+      )}
 
       <ProductDrawer
         open={!!selectedProductId}

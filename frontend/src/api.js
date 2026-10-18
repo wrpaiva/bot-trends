@@ -54,10 +54,31 @@ async function httpGet(path, { signal } = {}) {
   return r.json();
 }
 
+// POST com corpo JSON; mesmos erros acionáveis do GET
+async function httpPost(path, corpo) {
+  let r;
+  try {
+    r = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(corpo),
+    });
+  } catch {
+    throw new Error(`Não foi possível falar com a API em ${API_BASE}. O dashboard está no ar?`);
+  }
+  if (!r.ok) {
+    const erro = await erroHttp(r, path);
+    erro.status = r.status;
+    throw erro;
+  }
+  return r.json();
+}
+
 export const api = {
   // cursor: `next_cursor` da página anterior (TIE-32); omitido na primeira página
-  rankingsLatest: ({ hours, limit, source, cursor, signal }) => {
+  rankingsLatest: ({ hours, limit, source, category, cursor, signal }) => {
     const q = new URLSearchParams({ hours, limit, source });
+    if (category) q.set("category", category);
     if (cursor) q.set("cursor", cursor);
     return httpGet(`/rankings/latest?${q}`, { signal });
   },
@@ -74,4 +95,15 @@ export const api = {
       throw e;
     }
   },
+
+  // Busca por título (TIE-30/TIE-45)
+  search: ({ q, page = 1, limit = 20, signal }) =>
+    httpGet(`/search?${new URLSearchParams({ q, page, limit })}`, { signal }),
+
+  categories: () => httpGet(`/categories?limit=200`),
+  enableCategories: (ids) => httpPost("/categories/enable", ids),
+  disableCategories: (ids) => httpPost("/categories/disable", ids),
+  // Nome e caminho vêm do ML; 404 = ID que o ML não conhece
+  addCategory: ({ mlCategoryId, enabled = true }) =>
+    httpPost("/categories", { ml_category_id: mlCategoryId, enabled }),
 };

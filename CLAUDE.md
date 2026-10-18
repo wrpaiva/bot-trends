@@ -469,6 +469,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   que muda a decisão entra em `CAMPOS_DA_CHAVE`**, senão a mudança vira confirmação silenciosa.
   Expurgo diário `tasks.purge_old_data` (`INSIGHT_RETENTION_DAYS`=90); `metrics` não expira
   por padrão porque o backtest lê a série inteira.
+- **Categoria só por `curl` e Mongo, e ranking com `MLB1618` no lugar do nome** (TIE-45). O
+  dashboard tem a aba **Categorias** (habilita/desabilita e cadastra subcategoria pelo ID), o
+  ranking filtra por `category` e traz `category_name`, e a busca usa o `GET /search`.
+  `POST /categories` busca nome e caminho em `/categories/{id}` do ML — responde a token comum
+  (2026-10-17), 404 para ID inexistente. A categoria mora no **produto**, não no insight: o filtro
+  resolve os `product_id` antes do pipeline, e filtrar por uma tira o TikTok (vídeo não tem
+  categoria). Produto do ML criado pelo vínculo da TIE-18 também sai sem categoria. O `query` de
+  `GET /categories` virou texto literal (`re.escape`): era regex do usuário direto no Mongo.
 - **Drawer de produto frágil.** Um 404 no insight (produto ainda não analisado) derrubava o
   `Promise.all` e escondia até a curva; métrica ausente (preço no TikTok) era plotada como 0; o
   eixo só tinha `HH:MM` numa janela de 72 h; dados do produto anterior ficavam na tela. Agora

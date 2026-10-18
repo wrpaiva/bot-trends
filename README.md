@@ -157,6 +157,9 @@ curl -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '["MLB1051", "MLB1000"]' http://localhost:8000/categories/enable
 ```
 
+Pelo dashboard, a aba **Categorias** faz o mesmo e cadastra subcategoria pelo ID do ML
+(`MLB1618` = Cozinha): o nome vem do ML, e a categoria entra habilitada.
+
 ### 4️⃣ Conferir
 
 ```bash
@@ -257,12 +260,13 @@ faz o mesmo. O CI faz o build com uma chave-canário e falha se ela aparecer no 
 | `GET /health/ready` | — | Readiness: `ready`; `degraded` (200) com Redis fora ou migração pendente/falha; `unavailable` (503) com Mongo fora. Usado pelo healthcheck do Docker |
 | `GET /health/migrations` | ✅ | Status das últimas migrações: `ok`, `degraded` (alguma falhou) ou `running` |
 | `GET /metrics` | ✅ | Métricas no formato Prometheus: requisições e latência da API por rota, idade da última coleta/insight/backup, fallback do LLM, filas e circuitos (ver "Observabilidade") |
-| `GET /rankings/latest` | ✅ | Ranking por `final_score`, um item por produto (o insight mais recente). Query: `source` (`all`\|`mercadolivre`\|`tiktok`), `limit` (1–200), `hours` (1–720, recência: gerados nas últimas N horas), `window_hours` (opcional: só insights calculados com essa janela), `cursor`. Paginado por cursor |
+| `GET /rankings/latest` | ✅ | Ranking por `final_score`, um item por produto (o insight mais recente). Query: `source` (`all`\|`mercadolivre`\|`tiktok`), `limit` (1–200), `hours` (1–720, recência: gerados nas últimas N horas), `window_hours` (opcional: só insights calculados com essa janela), `category` (opcional: `ml_category_id` do produto; tira o TikTok, que não tem categoria), `cursor`. Paginado por cursor. Cada item traz `category_name` (null se a categoria não está cadastrada) |
 | `GET /insights/latest` | ✅ | Insights gerados nas últimas `hours` horas, do mais novo ao mais antigo. Query: `limit`, `hours`, `window_hours` (opcional), `cursor`. Paginado por cursor |
 | `GET /search` | ✅ | Busca no título (stemming em português, ignora acento), por relevância, com o último score de cada produto. Query: `q` (2–100 caracteres), `page`, `limit` (1–50) |
 | `GET /products/{product_id}/insight/latest` | ✅ | Último insight do produto (404 se não houver) |
 | `GET /products/{product_id}/curve` | ✅ | Produto + métricas das últimas `hours` horas, em ordem cronológica |
-| `GET /categories` | ✅ | Categorias com `ml_category_id`. Query: `query` (regex no nome), `limit` |
+| `GET /categories` | ✅ | Categorias com `ml_category_id`, por nome. Query: `query` (trecho do nome, sem regex), `enabled` (opcional), `limit` |
+| `POST /categories` | ✅ | Corpo: `{"ml_category_id": "MLB1618", "enabled": true}`. Cadastra a categoria (ou subcategoria) com o nome e o caminho buscados no ML; já existente só atualiza o nome. 404 se o ML não a conhece, 503 sem token do ML |
 | `POST /categories/enable` | ✅ | Corpo: lista de `ml_category_id`. Habilita para a coleta |
 | `POST /categories/disable` | ✅ | Corpo: lista de `ml_category_id`. Desabilita |
 

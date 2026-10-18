@@ -36,7 +36,7 @@ def test_seed_default_tem_ml_category_id_e_nome():
 
 def test_seed_default_aparece_na_listagem_da_api(db):
     seed_categories(db, default_seed())
-    assert routes.list_categories(query="", limit=200)["count"] == len(default_seed())
+    assert routes.list_categories(query="", enabled=None, limit=200)["count"] == len(default_seed())
 
 
 def test_categoria_do_seed_default_pode_ser_habilitada_e_coletada(db):
