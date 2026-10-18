@@ -11,6 +11,8 @@
 #      quando falha ou quando o último sucesso fica velho
 #
 # Saída != 0 em qualquer falha. Senha de URI nunca vai para log nem registro.
+# Todo comando externo tem teto de tempo: com o Mongo inalcançável o mongodump
+# não termina nunca (QA de 2026-10-14, > 22 min) e prendia o backup-loop.
 set -uo pipefail
 
 : "${MONGO_URI:?defina MONGO_URI}"
@@ -20,6 +22,9 @@ RETENCAO_DIAS=${BACKUP_RETENTION_DAYS:-14}
 MANTER_MIN=${BACKUP_KEEP_MIN:-3}
 REGISTRAR=${BACKUP_RECORD:-1}
 UPLOAD=${BACKUP_UPLOAD_CMD:-}
+TEMPO_DUMP=${BACKUP_DUMP_TIMEOUT_S:-1800}
+TEMPO_REGISTRO=${BACKUP_RECORD_TIMEOUT_S:-60}
+TEMPO_UPLOAD=${BACKUP_UPLOAD_TIMEOUT_S:-3600}
 
 mascara() { sed -E 's#(://[^:/@ ]*:)[^@ ]+@#\1***@#g'; }
 log() { echo "[backup] $*" | mascara; }
@@ -38,7 +43,9 @@ registra() { # <status> [erro]
   [ -f "$base.counts.json" ] && contagens=$(cat "$base.counts.json")
   # Sem senha, sem aspas/barras que quebrem o JS, uma linha só
   erro=$(printf '%s' "$erro" | mascara | tr -d "'\\\\" | tr '\n' ' ' | cut -c1-500)
-  mongosh "$MONGO_URI" --quiet --eval "db.getSiblingDB('$MONGO_DB').backups.insertOne({ts: new Date(), status: '$status', file: '$(basename "$arq")', size_bytes: $tamanho, duration_s: $(($(date +%s) - inicio)), counts: $contagens, error: '$erro'})" \
+  # Sem Mongo o registro também não sai: fica o log, e o check de saúde pega
+  # pela idade do último backup
+  timeout -k 10 "$TEMPO_REGISTRO" mongosh "$MONGO_URI" --quiet --eval "db.getSiblingDB('$MONGO_DB').backups.insertOne({ts: new Date(), status: '$status', file: '$(basename "$arq")', size_bytes: $tamanho, duration_s: $(($(date +%s) - inicio)), counts: $contagens, error: '$erro'})" \
     >/dev/null 2>&1 || log "aviso: não foi possível gravar o registro em $MONGO_DB.backups"
 }
 
@@ -52,7 +59,11 @@ falha() {
 mkdir -p "$BACKUP_DIR" || falha "não consegui criar $BACKUP_DIR"
 
 # 1-2. dump + contagens
-if ! mongodump --uri="$MONGO_URI" --db="$MONGO_DB" --archive="$tmp" --gzip 2>"$errf"; then
+timeout -k 10 "$TEMPO_DUMP" mongodump --uri="$MONGO_URI" --db="$MONGO_DB" --archive="$tmp" --gzip 2>"$errf"
+rc=$?
+if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+  falha "mongodump: tempo esgotado (${TEMPO_DUMP} s) — Mongo inalcançável?"
+elif [ "$rc" -ne 0 ]; then
   falha "mongodump: $(grep -v '^[[:space:]]*$' "$errf" | tail -1)"
 fi
 mv "$tmp" "$arq"
@@ -65,7 +76,11 @@ log "ok: $(basename "$arq") ($(stat -c %s "$arq") bytes) {${contagens}}"
 # 3. upload opcional
 if [ -n "$UPLOAD" ]; then
   cmd=${UPLOAD//\{\}/$arq}
-  if ! bash -c "$cmd" 2>"$errf"; then
+  timeout -k 10 "$TEMPO_UPLOAD" bash -c "$cmd" 2>"$errf"
+  rc=$?
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    falha "upload: tempo esgotado (${TEMPO_UPLOAD} s)"
+  elif [ "$rc" -ne 0 ]; then
     falha "upload: $(grep -v '^[[:space:]]*$' "$errf" | tail -1)"
   fi
   log "upload ok"

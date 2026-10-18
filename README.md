@@ -634,6 +634,10 @@ O serviço `backup` do compose roda `infra/backup/backup.sh` a cada `BACKUP_INTE
 `.counts.json` ao lado (documentos por collection, lido da saída do próprio dump). Retenção de
 `BACKUP_RETENTION_DAYS` (14) dias, sempre mantendo os `BACKUP_KEEP_MIN` (3) mais recentes. Cada
 execução grava o resultado em `trends.backups`; se falhar ou ficar velho, o check de saúde alerta.
+Cada etapa tem teto de tempo (`BACKUP_DUMP_TIMEOUT_S`, 1800; `BACKUP_UPLOAD_TIMEOUT_S`, 3600): com o
+Mongo inalcançável o `mongodump` não termina sozinho (nem com SIGTERM), e antes prendia o ciclo para
+sempre. Nesse caso nem o registro `failed` chega ao banco — fica o log, e o check de saúde pega pela
+idade do último backup.
 
 **Fora da máquina** — o dump local não protege contra perder o disco. Escolha um:
 - aponte `BACKUP_HOST_DIR` para um disco externo ou NAS montado; ou
