@@ -1,8 +1,9 @@
 # apps/worker/tasks_health.py
 """
 Saúde do próprio sistema (TIE-39): detecta a falha silenciosa — coleta ou
-análise paradas, LLM sempre no fallback, fila acumulando, backup falhando — e
-avisa num canal do Telegram separado do de tendências.
+análise paradas, LLM sempre no fallback, fila acumulando, backup falhando,
+ofertas do ML paradas (TIE-54) — e avisa num canal do Telegram separado do de
+tendências.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ logger = logging.getLogger(__name__)
 # A análise roda a cada 30 min (beat); duas rodadas perdidas = problema
 ANALYSIS_MAX_AGE = dt.timedelta(minutes=60)
 ML_INTERVAL = dt.timedelta(hours=6)
+# `refresh_ml_offers` roda a cada 6 h: duas rodadas perdidas = problema
+OFERTAS_MAX_AGE = 2 * dt.timedelta(hours=6)
 QUEUES = ("celery", "ml", "tiktok", "trend")
 
 
@@ -129,6 +132,42 @@ def check_backups(db) -> HealthCheck:
     )
 
 
+def check_ml_offers(db) -> HealthCheck:
+    """
+    Onde comprar envelhecendo (TIE-54). `refresh_ml_offers` só grava `ts`
+    quando lê: parada, a data envelhece. Vínculo sem leitura nenhuma conta a
+    partir da criação do produto, com o mesmo prazo.
+    """
+    vinculados = list(
+        db["products"].find(
+            {"source": "mercadolivre", "linked_videos": {"$exists": True, "$ne": []}},
+            {"_id": 0, "ml_offers.ts": 1, "created_at": 1},
+        )
+    )
+    if not vinculados:
+        return HealthCheck("ofertas_ml", False, "nenhum produto vinculado a vídeo")
+    agora = utcnow()
+    idades = []
+    for p in vinculados:
+        ts = (p.get("ml_offers") or {}).get("ts") or p.get("created_at")
+        idades.append(agora - ensure_utc(ts) if ts else None)
+    # Sem data nenhuma: não dá para dizer que está em dia
+    velhas = [i for i in idades if i is None or i > OFERTAS_MAX_AGE]
+    pior = max((i for i in idades if i is not None), default=None)
+    pior_txt = _horas(pior) if pior is not None else "?"
+    if velhas:
+        detalhe = (
+            f"{len(velhas)} de {len(vinculados)} produtos vinculados sem ofertas renovadas "
+            f"(mais velha há {pior_txt}, limite {_horas(OFERTAS_MAX_AGE)})"
+        )
+    else:
+        detalhe = (
+            f"ofertas de {len(vinculados)} produtos vinculados renovadas há até {pior_txt} "
+            f"(limite {_horas(OFERTAS_MAX_AGE)})"
+        )
+    return HealthCheck("ofertas_ml", bool(velhas), detalhe)
+
+
 def _redis():
     return redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
 
@@ -154,6 +193,7 @@ def system_health_check():
         lambda: [check_llm_fallback(db)],
         lambda: [check_queues(_redis())],
         lambda: [check_backups(db)],
+        lambda: [check_ml_offers(db)],
     )
     for check in checks:
         # Um check quebrado não pode calar os outros
