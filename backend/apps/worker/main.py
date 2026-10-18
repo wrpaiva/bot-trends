@@ -34,6 +34,7 @@ celery_app = Celery(
         "apps.worker.tasks_trend",
         "apps.worker.tasks_health",
         "apps.worker.tasks_link",
+        "apps.worker.tasks_retention",
     ],
 )
 
@@ -45,6 +46,7 @@ celery_app.conf.task_routes = {
     "tasks.hybrid_trend_analyze": {"queue": "trend"},
     # Fila padrão: se "trend" encher, o check de fila ainda consegue rodar (TIE-39)
     "tasks.system_health_check": {"queue": "celery"},
+    "tasks.purge_old_data": {"queue": "celery"},
 }
 
 # Scheduler (Celery Beat)
@@ -69,6 +71,11 @@ celery_app.conf.beat_schedule = {
     "system-health-every-15m": {
         "task": "tasks.system_health_check",
         "schedule": 60 * 15,
+    },
+    # Retenção (TIE-47): apaga o que passou de INSIGHT/METRICS_RETENTION_DAYS
+    "purge-old-data-daily": {
+        "task": "tasks.purge_old_data",
+        "schedule": 60 * 60 * 24,
     },
 }
 

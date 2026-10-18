@@ -8,6 +8,7 @@ from .versions.v005_add_products_text_index import V005AddProductsTextIndex
 from .versions.v006_add_insights_window_ts_index import V006AddInsightsWindowTsIndex
 from .versions.v007_text_index_language_override import V007TextIndexLanguageOverride
 from .versions.v008_insights_ts_id_index import V008InsightsTsIdIndex
+from .versions.v009_compact_repeated_insights import V009CompactRepeatedInsights
 
 
 def get_migrations():
@@ -20,4 +21,5 @@ def get_migrations():
         V006AddInsightsWindowTsIndex(),
         V007TextIndexLanguageOverride(),
         V008InsightsTsIdIndex(),
+        V009CompactRepeatedInsights(),
     ]

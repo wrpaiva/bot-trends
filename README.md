@@ -511,6 +511,7 @@ com 2 a 3 semanas de coleta** antes de mexer nos pesos do ML.
 | `tasks.link_tiktok_ml` | `ml` | a cada `TIKTOK_INTERVAL_MIN` minutos — vincula vídeo comercial do TikTok ao produto do catálogo do ML (ver "Vínculo TikTok → ML") |
 | `tasks.hybrid_trend_analyze` | `trend` | a cada 30 min |
 | `tasks.system_health_check` | `celery` | a cada 15 min — alerta em `TELEGRAM_SYSTEM_CHAT_ID` se coleta/análise pararem, o LLM cair no fallback demais, a fila acumular ou o backup falhar |
+| `tasks.purge_old_data` | `celery` | a cada 24 h — apaga insight com mais de `INSIGHT_RETENTION_DAYS` (90) e métrica com mais de `METRICS_RETENTION_DAYS` (0 = nunca); ver "Retenção" |
 
 As tasks de coleta devolvem `status` `ok`, `partial` (alguma requisição falhou) ou `error`
 (nada coletado por falha), junto com `inserted` e `errors`.
@@ -565,13 +566,31 @@ docker compose run --rm api python -c \
 |---|---|---|
 | `products` | Produto normalizado de cada fonte: `title`, `category`, `brand`, `permalink`, `canonical_id` (reservado para casar o mesmo produto entre fontes) | Dedupe por `source` + `source_product_id` (índice único); `product_id` (UUID) é o id interno usado pelas outras collections |
 | `metrics` | Série temporal por produto: `ts`, `source`, `price`, `views`, `engagement`, `mentions` | `product_id` + `ts` |
-| `trend_insights` | Resultado de cada análise: `numeric_score`, `llm_score`, `final_score`, `trend_classification`, `risk_level`, `analysis`, `recommendation`, `sources`, janela (`window_from`/`window_to`/`window_hours`) | `product_id` + `ts` |
+| `trend_insights` | Resultado da análise: `numeric_score`, `llm_score`, `final_score`, `trend_classification`, `risk_level`, `analysis`, `recommendation`, `sources`, janela (`window_from`/`window_to`/`window_hours`). Um documento por **resultado**: repetição só avança `ts` (`first_ts` = desde quando vale, `confirmations` = quantas vezes se repetiu) | `product_id` + `ts` |
 | `categories` | `key`, `name`, `ml_category_id`, `enabled`, `keywords` | `key` |
 | `alert_state` | Último alerta por produto: `alerted_at`, `classification`, `final_score` | `product_id` |
 | `migrations`, `migration_lock` | Controle das migrações | — |
 
 Migrações (`backend/src/infrastructure/db/migrations/versions/`) são idempotentes, versionadas e
 protegidas por lock distribuído. Não há rollback: correção é sempre uma migração nova.
+
+### Retenção (TIE-47)
+
+A análise roda a cada 30 min e, com métricas paradas e o cache do LLM, repete o resultado: em
+2026-10-18, 94% dos insights de 7 dias repetiam o anterior do produto, e eram 50 dos 51 MB do
+banco. Agora o insight que repete o anterior (mesmos scores, classificação, risco, fontes, pesos,
+versão do prompt e fallback — `src/domain/insight_dedupe.py`) **não vira documento novo**: o
+anterior é confirmado (`ts` e janela avançam, texto e sinais ficam os da análise mais nova).
+Quem lê "o insight mais recente" (ranking, drawer, check de saúde) não muda. A task devolve
+`insights_inserted` e `insights_confirmed`; `INSIGHT_DEDUPE=false` volta a gravar tudo.
+
+A migração `v009` compacta o histórico no mesmo formato. Na cópia dos dados reais: 43.766 →
+3.004 insights (49,9 → 3,5 MB) em 7,6 s, com o insight mais recente dos 627 produtos idêntico.
+
+O expurgo diário (`tasks.purge_old_data`) apaga insight sem confirmação há mais de
+`INSIGHT_RETENTION_DAYS` dias. `metrics` fica para sempre por padrão
+(`METRICS_RETENTION_DAYS=0`): o backtest recalcula o score sobre a série inteira, e ela é pequena
+(0,9 MB). Mudou o prazo? Vale no `backend/.env`, sem migração — por isso é task, e não índice TTL.
 
 ---
 
@@ -612,7 +631,7 @@ check de saúde.
 | `trends_llm_calls_total{result}` | counter | Chamadas HTTP reais ao LLM: `ok`, `http_429`, `erro_rede`, `resposta_invalida`... — é o que custa |
 | `trends_llm_cache_total{result}` | counter | Cache do LLM: `hit` poupa uma chamada |
 | `trends_last_insight_age_seconds` | gauge | Desde o último insight |
-| `trends_insights_24h` | gauge | Insights nas últimas 24 h |
+| `trends_insights_24h` | gauge | Insights vigentes nas últimas 24 h (gravados ou confirmados; desde a TIE-47, ~1 por produto analisado) |
 | `trends_products{source}` | gauge | Produtos/vídeos conhecidos |
 | `trends_llm_fallback_ratio` / `_sample` | gauge | Fração dos insights das últimas 6 h sem LLM, e a amostra |
 | `trends_celery_queue_length{queue}` | gauge | Mensagens esperando por fila |

@@ -461,6 +461,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   e "Carregar mais" seguido de troca de filtro anexava a página antiga. Agora `ultimaRequisicao()`
   aborta a anterior e só a mais nova grava na tela. **Requisição nova na tela usa o mesmo padrão**
   (o drawer usa `cancelado`). 502/503/504 sem `detail` é o nginx sem API, com dica do que olhar.
+- **Insight repetido a cada 30 min e nenhuma retenção** (TIE-47). 94% dos insights repetiam o
+  anterior do produto (50 dos 51 MB do banco). `TrendInsightRepo.record` confirma o anterior
+  quando `insight_dedupe.repete` (`ts` avança, `first_ts` fica, `confirmations` conta) e a v009
+  compactou o histórico. **"Insight mais recente por `ts`" continua valendo**, mas
+  `count_documents` de insights deixou de contar análises — conte `confirmations`. **Campo novo
+  que muda a decisão entra em `CAMPOS_DA_CHAVE`**, senão a mudança vira confirmação silenciosa.
+  Expurgo diário `tasks.purge_old_data` (`INSIGHT_RETENTION_DAYS`=90); `metrics` não expira
+  por padrão porque o backtest lê a série inteira.
 - **Drawer de produto frágil.** Um 404 no insight (produto ainda não analisado) derrubava o
   `Promise.all` e escondia até a curva; métrica ausente (preço no TikTok) era plotada como 0; o
   eixo só tinha `HH:MM` numa janela de 72 h; dados do produto anterior ficavam na tela. Agora

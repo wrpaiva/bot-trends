@@ -51,4 +51,5 @@ def test_get_migrations_devolve_as_versoes_em_ordem():
         "V006AddInsightsWindowTsIndex",
         "V007TextIndexLanguageOverride",
         "V008InsightsTsIdIndex",
+        "V009CompactRepeatedInsights",
     ]
