@@ -515,7 +515,13 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   confere contagens — em 2026-09-27 restaurou 10.781 documentos com todas as contagens batendo.
   **O `mongodump` 100.x escreve o namespace entre crases** (`` done dumping `trends.metrics` ``):
   a 1ª versão do script assumia sem crase e gerava gabarito vazio — o stub do teste usa o
-  formato real. Destino fora da máquina ainda depende de escolha do usuário (TIE-35). **Com o
+  formato real. **Fora da máquina: Cloudflare R2** (escolha do usuário em 2026-10-18): a imagem do `backup` é
+  `infra/backup/Dockerfile` (`mongo:7` + `rclone` fixo), o remoto `r2` é montado só por
+  `RCLONE_CONFIG_R2_*` no compose (credenciais `BACKUP_R2_*` no `.env` da raiz) e o script envia
+  dump e contagens para `BACKUP_REMOTE`, com retenção remota própria. Falha no envio = backup
+  `failed`; falha só na retenção remota fica no log. **O dump leva `ml_oauth`** (bucket privado).
+  Para testar sem a Cloudflare, `rclone serve s3` faz de S3 local (a imagem `minio/minio` saiu do
+  Docker Hub) — com `no_check_bucket` o rclone não cria o bucket: crie a pasta antes (TIE-35). **Com o
   Mongo inalcançável o `mongodump` pendura para sempre** (QA de 2026-10-14: > 22 min, e o
   `backup-loop` nunca mais rodava) e ignora SIGTERM: toda chamada externa do `backup.sh` passa
   por `timeout -k 10` (o KILL é o que encerra o dump). **Comando novo no script ganha teto.**

@@ -4,7 +4,10 @@
 #   1. mongodump comprimido → $BACKUP_DIR/trends-<UTC>.archive.gz (atômico: .tmp + mv)
 #   2. contagem de documentos por collection → trends-<UTC>.counts.json, tirada
 #      da própria saída do mongodump: é o gabarito do restore_test.sh
-#   3. BACKUP_UPLOAD_CMD opcional ({} = caminho do arquivo) para tirar da máquina
+#   3. cópia fora da máquina, opcional: BACKUP_REMOTE (remoto do rclone, ex.
+#      r2:trends-backups) recebe o dump e as contagens, com retenção própria
+#      (BACKUP_REMOTE_RETENTION_DAYS, mantendo os BACKUP_KEEP_MIN mais novos);
+#      ou BACKUP_UPLOAD_CMD ({} = caminho do arquivo) para qualquer outro destino
 #   4. retenção: apaga os mais velhos que BACKUP_RETENTION_DAYS, mas sempre
 #      mantém os BACKUP_KEEP_MIN mais recentes
 #   5. registra o resultado em <db>.backups — o check de saúde (TIE-39) alerta
@@ -25,6 +28,8 @@ UPLOAD=${BACKUP_UPLOAD_CMD:-}
 TEMPO_DUMP=${BACKUP_DUMP_TIMEOUT_S:-1800}
 TEMPO_REGISTRO=${BACKUP_RECORD_TIMEOUT_S:-60}
 TEMPO_UPLOAD=${BACKUP_UPLOAD_TIMEOUT_S:-3600}
+REMOTO=${BACKUP_REMOTE:-}
+RETENCAO_REMOTA_DIAS=${BACKUP_REMOTE_RETENTION_DAYS:-30}
 
 mascara() { sed -E 's#(://[^:/@ ]*:)[^@ ]+@#\1***@#g'; }
 log() { echo "[backup] $*" | mascara; }
@@ -73,7 +78,48 @@ contagens=$(sed -nE "$padrao" "$errf" | paste -sd, -)
 echo "{${contagens}}" >"$base.counts.json"
 log "ok: $(basename "$arq") ($(stat -c %s "$arq") bytes) {${contagens}}"
 
-# 3. upload opcional
+# 3a. remoto do rclone (credenciais nas RCLONE_CONFIG_<REMOTO>_* do compose)
+envia() { # <etapa> <comando...> — mesmo teto e mesma falha do upload
+  local etapa=$1
+  shift
+  timeout -k 10 "$TEMPO_UPLOAD" "$@" 2>"$errf"
+  rc=$?
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    falha "$etapa: tempo esgotado (${TEMPO_UPLOAD} s)"
+  elif [ "$rc" -ne 0 ]; then
+    falha "$etapa: $(grep -v '^[[:space:]]*$' "$errf" | tail -1)"
+  fi
+}
+if [ -n "$REMOTO" ]; then
+  REMOTO=${REMOTO%/}
+  envia "remoto" rclone copyto "$arq" "$REMOTO/$(basename "$arq")"
+  envia "remoto" rclone copyto "$base.counts.json" "$REMOTO/$(basename "$base").counts.json"
+  log "remoto ok: $REMOTO/$(basename "$arq")"
+  # Retenção no remoto: mesma regra da local, sobre a listagem do bucket.
+  # Listar falhou? Não apaga nada — e o backup, que já subiu, não vira falha.
+  corte_remoto=$(date -u -d "-${RETENCAO_REMOTA_DIAS} days" +%Y%m%dT%H%M%SZ)
+  if lista=$(timeout -k 10 "$TEMPO_UPLOAD" rclone lsf --files-only "$REMOTO" 2>"$errf"); then
+    i=0
+    while IFS= read -r nome; do
+      i=$((i + 1))
+      [ "$i" -le "$MANTER_MIN" ] && continue
+      t=${nome#trends-}
+      t=${t%.archive.gz}
+      if [[ "$t" < "$corte_remoto" ]]; then
+        if timeout -k 10 "$TEMPO_UPLOAD" rclone deletefile "$REMOTO/$nome" 2>"$errf"; then
+          timeout -k 10 "$TEMPO_UPLOAD" rclone deletefile "$REMOTO/trends-$t.counts.json" 2>/dev/null
+          log "retenção remota: removido $nome"
+        else
+          log "aviso: não apaguei $nome do remoto: $(tail -1 "$errf")"
+        fi
+      fi
+    done < <(printf '%s\n' "$lista" | grep -E '^trends-[0-9]{8}T[0-9]{6}Z\.archive\.gz$' | sort -r)
+  else
+    log "aviso: não listei $REMOTO; retenção remota fica para o próximo ciclo"
+  fi
+fi
+
+# 3b. upload por comando livre
 if [ -n "$UPLOAD" ]; then
   cmd=${UPLOAD//\{\}/$arq}
   timeout -k 10 "$TEMPO_UPLOAD" bash -c "$cmd" 2>"$errf"
