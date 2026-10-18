@@ -5,12 +5,14 @@ Rotas da API com TestClient e mongomock (TIE-12).
 
 import datetime as dt
 
+import httpx
 import mongomock
 import pytest
 from fastapi.testclient import TestClient
 
 from apps.api import routes
 from apps.api.main import app
+from src.infrastructure.collectors.ml_auth import MLAuthError
 from src.infrastructure.config import settings
 from src.infrastructure.security.rate_limit import limiter
 from src.infrastructure.utils.datetime_utils import utcnow
@@ -194,6 +196,131 @@ def test_categorias_listar_habilitar_desabilitar(client, db):
     assert db["categories"].find_one({"key": "a"})["enabled"] is True
     assert client.post("/categories/disable", json=["MLB1051"]).json() == {"disabled_count": 1}
     assert db["categories"].find_one({"key": "a"})["enabled"] is False
+
+
+def test_categorias_filtra_por_enabled_e_ordena_por_nome(client, db):
+    db["categories"].insert_many(
+        [
+            {"key": "a", "name": "Celulares", "ml_category_id": "MLB1051", "enabled": True},
+            {"key": "b", "name": "Beleza", "ml_category_id": "MLB1246", "enabled": False},
+        ]
+    )
+    todas = client.get("/categories").json()["items"]
+    assert [c["name"] for c in todas] == ["Beleza", "Celulares"]
+    ativas = client.get("/categories", params={"enabled": True}).json()["items"]
+    assert [c["ml_category_id"] for c in ativas] == ["MLB1051"]
+
+
+def test_busca_de_categoria_trata_o_texto_como_literal(client, db):
+    db["categories"].insert_one(
+        {"key": "a", "name": "Celulares", "ml_category_id": "MLB1051", "enabled": False}
+    )
+    # Como regex, ".*" casaria com tudo e "(" daria erro no Mongo
+    assert client.get("/categories", params={"query": ".*"}).json()["count"] == 0
+    assert client.get("/categories", params={"query": "("}).status_code == 200
+
+
+@pytest.fixture
+def ml_categoria(monkeypatch):
+    """Troca a consulta ao ML: {id: resposta} ou {id: exceção}."""
+    respostas: dict = {}
+
+    def falso(cid):
+        r = respostas.get(cid)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(routes, "_categoria_no_ml", falso)
+    return respostas
+
+
+def test_adiciona_subcategoria_com_o_nome_do_ml(client, db, ml_categoria):
+    ml_categoria["MLB1618"] = {
+        "ml_category_id": "MLB1618",
+        "name": "Cozinha",
+        "path": ["Casa, Móveis e Decoração", "Cozinha"],
+    }
+
+    r = client.post("/categories", json={"ml_category_id": "MLB1618", "enabled": True})
+
+    assert r.status_code == 200
+    corpo = r.json()
+    assert corpo["created"] is True
+    assert corpo["category"]["name"] == "Cozinha"
+    assert corpo["category"]["enabled"] is True
+    doc = db["categories"].find_one({"ml_category_id": "MLB1618"})
+    assert (doc["key"], doc["path"][0]) == ("ml-MLB1618", "Casa, Móveis e Decoração")
+    # Aparece na lista e na coleta (que lê enabled + ml_category_id)
+    assert client.get("/categories", params={"enabled": True}).json()["count"] == 1
+
+
+def test_readicionar_categoria_atualiza_o_nome_e_mantem_enabled(client, db, ml_categoria):
+    db["categories"].insert_one(
+        {"key": "eletronicos", "name": "Antigo", "ml_category_id": "MLB1051", "enabled": True}
+    )
+    ml_categoria["MLB1051"] = {"ml_category_id": "MLB1051", "name": "Celulares", "path": []}
+
+    corpo = client.post("/categories", json={"ml_category_id": "MLB1051"}).json()
+
+    assert corpo["created"] is False
+    assert db["categories"].count_documents({}) == 1
+    doc = db["categories"].find_one({"ml_category_id": "MLB1051"})
+    # key do seed não muda (é a chave única), enabled não é desligado
+    assert (doc["key"], doc["name"], doc["enabled"]) == ("eletronicos", "Celulares", True)
+
+
+@pytest.mark.parametrize(
+    "resposta, status",
+    [
+        (None, 404),
+        (MLAuthError("sem token"), 503),
+        (httpx.ConnectError("fora"), 502),
+    ],
+)
+def test_adicionar_categoria_sem_resposta_do_ml(client, db, ml_categoria, resposta, status):
+    ml_categoria["MLB1618"] = resposta
+    r = client.post("/categories", json={"ml_category_id": "MLB1618"})
+    assert r.status_code == status
+    assert db["categories"].count_documents({}) == 0
+
+
+@pytest.mark.parametrize("cid, status", [("1618", 422), ("MLB16x", 422), ("MLA1618", 400)])
+def test_adicionar_categoria_valida_o_id(client, ml_categoria, cid, status):
+    assert client.post("/categories", json={"ml_category_id": cid}).status_code == status
+
+
+def test_ranking_filtra_por_categoria_e_mostra_o_nome(client, db):
+    db["categories"].insert_one(
+        {"key": "c", "name": "Cozinha", "ml_category_id": "MLB1618", "enabled": True}
+    )
+    db["products"].insert_many(
+        [
+            {"product_id": "panela", "title": "Panela", "category": "MLB1618"},
+            {"product_id": "fone", "title": "Fone", "category": "MLB1051"},
+            {"product_id": "video", "title": "Vídeo", "category": None},
+        ]
+    )
+    db["trend_insights"].insert_many(
+        [
+            _insight("panela", 50, sources=("mercadolivre",)),
+            _insight("fone", 60, sources=("mercadolivre",)),
+            _insight("video", 70),
+        ]
+    )
+
+    todos = client.get("/rankings/latest").json()["items"]
+    assert {i["product_id"]: i["category_name"] for i in todos} == {
+        "video": None,
+        "fone": None,  # categoria sem cadastro: a tela mostra o ID
+        "panela": "Cozinha",
+    }
+    so_cozinha = client.get("/rankings/latest", params={"category": "MLB1618"}).json()
+    assert [i["product_id"] for i in so_cozinha["items"]] == ["panela"]
+
+
+def test_ranking_com_categoria_invalida_da_422(client):
+    assert client.get("/rankings/latest", params={"category": "x; drop"}).status_code == 422
 
 
 # --- Health das migrações ---------------------------------------------------

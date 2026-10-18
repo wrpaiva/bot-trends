@@ -1,5 +1,6 @@
 import React from "react";
 import { viewState } from "../ranking.js";
+import { nomeCategoria } from "../categorias.js";
 
 // Cores por gravidade: o que precisa de atenção salta aos olhos (TIE-28)
 const CLASS_COLOR = {
@@ -33,7 +34,7 @@ const COLUNAS = [
   { key: "trend_classification", label: "Status", width: 150 },
   { key: "risk_level", label: "Risco", width: 90 },
   { key: "title", label: "Produto" },
-  { key: "category", label: "Categoria", width: 120, sortable: false },
+  { key: "category", label: "Categoria", width: 160, sortable: false },
   { key: "sources", label: "Fontes", width: 110, sortable: false },
 ];
 
@@ -73,7 +74,8 @@ export default function RankingTable({ items, loading, error, sort, onSort, onSe
 
       {estado === "empty" && (
         <Aviso>
-          Nenhum produto analisado neste período e fonte. Aumente o período, troque a fonte, ou
+          Nenhum produto analisado neste período, fonte e categoria. Aumente o período, troque a fonte
+          ou a categoria, ou
           confira se a coleta e a análise estão rodando (<code>docker compose logs worker</code>).
         </Aviso>
       )}
@@ -138,7 +140,9 @@ export default function RankingTable({ items, loading, error, sort, onSort, onSe
                       {it.title || it.product_id}
                     </div>
                   </td>
-                  <td style={cel}>{it.category || "-"}</td>
+                  <td style={cel} title={it.category || undefined}>
+                    {nomeCategoria(it)}
+                  </td>
                   <td style={cel}>{(it.sources || []).join(", ") || "-"}</td>
                 </tr>
               ))}

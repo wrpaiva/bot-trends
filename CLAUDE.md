@@ -461,6 +461,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   e "Carregar mais" seguido de troca de filtro anexava a página antiga. Agora `ultimaRequisicao()`
   aborta a anterior e só a mais nova grava na tela. **Requisição nova na tela usa o mesmo padrão**
   (o drawer usa `cancelado`). 502/503/504 sem `detail` é o nginx sem API, com dica do que olhar.
+- **Categoria só por `curl` e Mongo, e ranking com `MLB1618` no lugar do nome** (TIE-45). O
+  dashboard tem a aba **Categorias** (habilita/desabilita e cadastra subcategoria pelo ID), o
+  ranking filtra por `category` e traz `category_name`, e a busca usa o `GET /search`.
+  `POST /categories` busca nome e caminho em `/categories/{id}` do ML — responde a token comum
+  (2026-10-17), 404 para ID inexistente. A categoria mora no **produto**, não no insight: o filtro
+  resolve os `product_id` antes do pipeline, e filtrar por uma tira o TikTok (vídeo não tem
+  categoria). Produto do ML criado pelo vínculo da TIE-18 também sai sem categoria. O `query` de
+  `GET /categories` virou texto literal (`re.escape`): era regex do usuário direto no Mongo.
 - **Drawer de produto frágil.** Um 404 no insight (produto ainda não analisado) derrubava o
   `Promise.all` e escondia até a curva; métrica ausente (preço no TikTok) era plotada como 0; o
   eixo só tinha `HH:MM` numa janela de 72 h; dados do produto anterior ficavam na tela. Agora

@@ -466,3 +466,52 @@ def test_busca_retenta_erro_transitorio():
     with _busca(handler) as c:
         assert len(c.buscar_catalogo("porta temperos")) == 2
         assert c.errors == 0
+
+
+# --- Categoria pelo ID (TIE-45) ----------------------------------------------
+
+
+def _cat(handler) -> MercadoLivreCollector:
+    c = _collector(handler, categorias=())
+    c._get_category.retry.sleep = lambda *_: None
+    return c
+
+
+def test_categoria_traz_nome_e_caminho():
+    # Formato real de /categories/{id} com token comum (2026-10-17), resumido
+    def handler(request):
+        assert request.url.path == "/categories/MLB1618"
+        return httpx.Response(
+            200,
+            json={
+                "id": "MLB1618",
+                "name": "Cozinha",
+                "path_from_root": [
+                    {"id": "MLB1574", "name": "Casa, Móveis e Decoração"},
+                    {"id": "MLB1618", "name": "Cozinha"},
+                ],
+                "children_categories": [],
+            },
+        )
+
+    with _cat(handler) as c:
+        assert c.categoria("MLB1618") == {
+            "ml_category_id": "MLB1618",
+            "name": "Cozinha",
+            "path": ["Casa, Móveis e Decoração", "Cozinha"],
+        }
+
+
+def test_categoria_inexistente_eh_none():
+    with _cat(lambda r: httpx.Response(404, json={"message": "Category not found"})) as c:
+        assert c.categoria("MLB999") is None
+
+
+def test_categoria_com_erro_do_ml_sobe():
+    with _cat(lambda r: httpx.Response(403)) as c:
+        try:
+            c.categoria("MLB1618")
+        except httpx.HTTPStatusError as e:
+            assert e.response.status_code == 403
+        else:
+            raise AssertionError("403 deveria subir")

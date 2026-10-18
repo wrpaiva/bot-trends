@@ -1,16 +1,21 @@
 # apps/api/routes.py
 
 import datetime as dt
+import re
 
+import httpx
 import redis
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
 from pymongo.errors import OperationFailure
 
 from apps.api.pagination import decode_cursor, encode_cursor
 from src.infrastructure.circuit_breaker import breakers_status
+from src.infrastructure.collectors.mercado_livre import MercadoLivreCollector
+from src.infrastructure.collectors.ml_auth import MercadoLivreAuth, MLAuthError
 from src.infrastructure.config import settings
 from src.infrastructure.db.mongo import get_db
 from src.infrastructure.observability import http_metrics, render, system_samples
@@ -76,6 +81,20 @@ def metrics():
 # =========================================================
 
 
+def _nomes_de_categoria(db, ids) -> dict[str, str]:
+    """`ml_category_id` → nome, para a tela não mostrar `MLB1618` (TIE-45)."""
+    ids = sorted({c for c in ids if c})
+    if not ids:
+        return {}
+    return {
+        c["ml_category_id"]: c["name"]
+        for c in db["categories"].find(
+            {"ml_category_id": {"$in": ids}}, {"_id": 0, "ml_category_id": 1, "name": 1}
+        )
+        if c.get("name")
+    }
+
+
 @router.get("/rankings/latest")
 @limiter.limit("30/minute")
 def rankings_latest(
@@ -84,6 +103,7 @@ def rankings_latest(
     limit: int = Query(20, ge=1, le=200),
     hours: int = Query(72, ge=1, le=720),
     window_hours: int | None = Query(None, ge=1, le=720),
+    category: str | None = Query(None, pattern=r"^[A-Z]{3}\d{1,12}$"),
     cursor: str | None = Query(None, max_length=500),
 ):
     """
@@ -106,6 +126,11 @@ def rankings_latest(
 
     if source != "all":
         match["sources"] = {"$in": [source]}
+    if category:
+        # A categoria mora no produto, não no insight (TIE-45). Vídeo do TikTok
+        # não tem categoria: filtrar por uma tira o TikTok do ranking.
+        ids = db["products"].distinct("product_id", {"category": category})
+        match["product_id"] = {"$in": ids}
 
     pipeline = [
         {"$match": match},
@@ -139,6 +164,8 @@ def rankings_latest(
         for p in db["products"].find({"product_id": {"$in": product_ids}}, {"_id": 0})
     }
 
+    nomes = _nomes_de_categoria(db, [p.get("category") for p in products.values()])
+
     result = []
     for i in insights:
         p = products.get(i["product_id"], {})
@@ -147,6 +174,7 @@ def rankings_latest(
                 "product_id": i["product_id"],
                 "title": p.get("title"),
                 "category": p.get("category"),
+                "category_name": nomes.get(p.get("category")),
                 "final_score": i.get("final_score"),
                 "numeric_score": i.get("numeric_score"),
                 "llm_score": i.get("llm_score"),
@@ -303,7 +331,9 @@ def search_products(
             ]
         )
     }
+    nomes = _nomes_de_categoria(db, [i.get("category") for i in items])
     for i in items:
+        i["category_name"] = nomes.get(i.get("category"))
         ins = latest.get(i["product_id"])
         i["latest"] = (
             {
@@ -359,18 +389,80 @@ def product_curve(
 
 @router.get("/categories")
 def list_categories(
-    query: str = Query("", min_length=0),
+    query: str = Query("", min_length=0, max_length=100),
+    enabled: bool | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
 ):
     db = get_db()
-    filt = {"ml_category_id": {"$exists": True}}
+    filt: dict = {"ml_category_id": {"$exists": True}}
 
     if query:
-        filt["name"] = {"$regex": query, "$options": "i"}
+        # Texto do usuário é literal: "(" ou ".*" não podem virar regex
+        filt["name"] = {"$regex": re.escape(query), "$options": "i"}
+    if enabled is not None:
+        filt["enabled"] = enabled
 
-    items = list(db["categories"].find(filt, {"_id": 0}).limit(limit))
+    items = list(db["categories"].find(filt, {"_id": 0}).sort("name", 1).limit(limit))
 
     return {"count": len(items), "items": items}
+
+
+class NovaCategoria(BaseModel):
+    ml_category_id: str = Field(pattern=r"^[A-Z]{3}\d{1,12}$")
+    enabled: bool = False
+
+
+def _categoria_no_ml(category_id: str) -> dict | None:
+    """Nome e caminho da categoria no ML (None se não existe). Trocado nos testes."""
+    auth = MercadoLivreAuth.from_settings(get_db())
+    try:
+        with MercadoLivreCollector(categories=[], auth=auth) as ml:
+            return ml.categoria(category_id)
+    finally:
+        auth.close()
+
+
+@router.post("/categories")
+def add_category(body: NovaCategoria):
+    """
+    Cadastra (ou atualiza) uma categoria pelo ID do ML, com o nome buscado no
+    ML (TIE-45). Serve para subcategoria: antes exigia inserir no Mongo à mão.
+    Já existente mantém o `enabled`, a não ser que o corpo peça `enabled: true`.
+    """
+    cid = body.ml_category_id
+    if not cid.startswith(settings.ML_SITE_ID):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{cid} não é do site {settings.ML_SITE_ID}: a coleta só busca esse site.",
+        )
+    try:
+        info = _categoria_no_ml(cid)
+    except (MLAuthError, RuntimeError) as e:
+        raise HTTPException(
+            status_code=503, detail=f"Sem acesso à API do ML para buscar o nome: {e}"
+        ) from None
+    except (httpx.HTTPError, ValueError) as e:
+        raise HTTPException(
+            status_code=502, detail=f"O ML não respondeu ao buscar {cid}: {type(e).__name__}"
+        ) from None
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Categoria {cid} não existe no ML.")
+
+    db = get_db()
+    now = utcnow()
+    definir = {"name": info["name"], "path": info["path"], "updated_at": now}
+    no_insert = {"key": f"ml-{cid}", "created_at": now, "keywords": []}
+    if body.enabled:
+        definir |= {"enabled": True, "enabled_at": now}
+    else:
+        no_insert["enabled"] = False
+    result = db["categories"].update_one(
+        {"ml_category_id": cid},
+        {"$set": definir, "$setOnInsert": {"ml_category_id": cid, **no_insert}},
+        upsert=True,
+    )
+    doc = db["categories"].find_one({"ml_category_id": cid}, {"_id": 0})
+    return {"created": result.upserted_id is not None, "category": doc}
 
 
 @router.post("/categories/enable")

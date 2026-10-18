@@ -332,6 +332,30 @@ class MercadoLivreCollector:
             return None
         return sugestoes[0].get("domain_id") if sugestoes else None
 
+    # `/categories/{id}` responde a token comum (2026-10-17): nome, caminho na
+    # árvore e filhas. É assim que a tela cadastra uma subcategoria (TIE-45).
+
+    @retry_transient(attempts=3, min_s=0.5, max_s=5, multiplier=0.5)
+    def _get_category(self, category_id: str) -> dict[str, Any]:
+        data = self._get(f"{self.base_url}/categories/{category_id}").json()
+        if not isinstance(data, dict) or not data.get("name"):
+            raise ValueError("resposta da categoria sem nome")
+        return data
+
+    def categoria(self, category_id: str) -> dict[str, Any] | None:
+        """
+        `{ml_category_id, name, path}` da categoria; None se o ML não a conhece
+        (404). Outras falhas sobem: quem chama decide (a rota responde 502).
+        """
+        try:
+            data = self._get_category(category_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+        path = [p["name"] for p in data.get("path_from_root") or [] if p.get("name")]
+        return {"ml_category_id": data.get("id") or category_id, "name": data["name"], "path": path}
+
     def _sem_token(self, e: MLAuthError) -> None:
         self.errors += 1
         self.auth_error = str(e)
