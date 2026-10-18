@@ -22,14 +22,22 @@ Mercado Livre (`--source mercadolivre`): o ML não dá vendas, mas o
 /highlights é o ranking de mais vendidos — subir nele é o resultado
 observável. Entram os produtos que estavam no ranking em T.
 - preditores: `score`, `posicao_atual` e `preco` (o mais barato primeiro);
-- desfechos: `posicao_futura`, `ganho_posicoes` (posições ganhas) e
-  `entrou_top5` (0/1, só para quem estava fora do top 5 em T; medido como
-  acerto no top-k contra a `taxa_base`, a fração que entrou).
+- desfechos: `posicao_futura`, `ganho_posicoes` (posições ganhas),
+  `entrou_top5` (0/1, só para quem estava fora do top 5 em T) e
+  `subida_forte` (0/1, ganhou `--subida` posições ou mais — o "viralizou" do
+  ML, TIE-23; só para quem estava abaixo dessa posição em T). Desfecho 0/1 é
+  medido como acerto no top-k contra a `taxa_base` e como AUC (0,5 = acaso).
   Quem some do ranking na coleta seguinte conta como 21º — mas só se a
   categoria dele foi coletada; sem isso, sumir pode ser falha do /highlights.
 
 Todo preditor e desfecho é "maior = melhor" (posição e preço entram com
 sinal trocado). "O score não bate o baseline" é resultado válido (D4).
+
+`comparacao`: score − cada baseline, corte a corte, com intervalo de 95% por
+bootstrap de DIAS inteiros (cortes do mesmo dia veem quase o mesmo ranking).
+Intervalo que não cruza o zero = diferença que não é sorte. `eventos` (ML):
+cada subida forte, uma vez por produto (a primeira), com data e o percentil
+do produto no corte segundo o score e segundo a posição.
 
 Limites: o LLM fica de fora (não dá para refazer as chamadas do passado sem
 custo nem garantir o mesmo modelo); cortes vizinhos compartilham produtos,
@@ -43,7 +51,14 @@ import datetime as dt
 import json
 
 from apps.worker import tasks_trend
-from src.domain.backtest import acerto_top_k, precision_at_k, spearman, summarize
+from src.domain.backtest import (
+    acerto_top_k,
+    auc,
+    ic_bootstrap_por_bloco,
+    precision_at_k,
+    spearman,
+    summarize,
+)
 from src.domain.percentile import PercentileContext
 from src.domain.scoring import NumericScoreStrategy
 from src.infrastructure.config import settings
@@ -56,11 +71,13 @@ FONTES = {
     },
     "mercadolivre": {
         "preditores": ("score", "posicao_atual", "preco"),
-        "desfechos": ("posicao_futura", "ganho_posicoes", "entrou_top5"),
+        "desfechos": ("posicao_futura", "ganho_posicoes", "entrou_top5", "subida_forte"),
     },
 }
-# Desfecho 0/1: prec@k vira acerto no top-k, comparado com a taxa base
-BINARIOS = {"entrou_top5"}
+# Desfecho 0/1: prec@k vira acerto no top-k, comparado com a taxa base, e AUC
+BINARIOS = {"entrou_top5", "subida_forte"}
+# Posições ganhas de uma coleta para a seguinte que contam como subida forte
+SUBIDA_FORTE = 10
 # O collector lê o top 20 de cada categoria (`max_items_per_category`)
 FORA_DO_RANKING = 21
 TOP_N = 5
@@ -139,7 +156,7 @@ def _ranking_em(db, ts: dt.datetime) -> dict[str, tuple[int, str | None]]:
     }
 
 
-def _itens_ml(db, pontuados, t, t_futuro) -> list[dict]:
+def _itens_ml(db, pontuados, t, t_futuro, subida: int) -> list[dict]:
     if t_futuro is None:
         return []
     agora, depois = _ranking_em(db, t), _ranking_em(db, t_futuro)
@@ -168,6 +185,8 @@ def _itens_ml(db, pontuados, t, t_futuro) -> list[dict]:
                 "posicao_futura": -pos_fut,
                 "ganho_posicoes": pos - pos_fut,
                 "entrou_top5": int(pos_fut <= TOP_N) if pos > TOP_N else None,
+                # Do 1º ao `subida`-ésimo não dá para ganhar `subida` posições
+                "subida_forte": int(pos - pos_fut >= subida) if pos > subida else None,
             }
         )
     return itens
@@ -180,6 +199,7 @@ def _metricas(pares: list[tuple[float, float]], desfecho: str, k: int) -> dict:
     if desfecho in BINARIOS:
         m["precision_at_k"] = acerto_top_k(previsto, real, k=k)
         m["taxa_base"] = sum(real.values()) / len(real)
+        m["auc"] = auc([a for a, _ in pares], [int(b) for _, b in pares])
     else:
         m["precision_at_k"] = precision_at_k(previsto, real, k=k)
     return m
@@ -196,6 +216,7 @@ def _corte(
     limit_products,
     k,
     min_pool,
+    subida,
 ):
     since = t - dt.timedelta(hours=window_hours)
     ativos = tasks_trend._produtos_ativos(db, since, limit_products, until=t)
@@ -217,7 +238,7 @@ def _corte(
     ]
 
     if source == "mercadolivre":
-        itens = _itens_ml(db, pontuados, t, t_futuro)
+        itens = _itens_ml(db, pontuados, t, t_futuro, subida)
     else:
         itens = _itens_tiktok(db, pontuados, t, horizon_hours)
     if len(itens) < min_pool:
@@ -230,10 +251,66 @@ def _corte(
         for d in FONTES[source]["desfechos"]:
             pares = [(i[p], i[d]) for i in itens if i[p] is not None and i[d] is not None]
             if len(pares) < min_pool:
-                preditores[p][d] = dict(vazio, taxa_base=None) if d in BINARIOS else vazio
+                preditores[p][d] = dict(vazio, taxa_base=None, auc=None) if d in BINARIOS else vazio
                 continue
             preditores[p][d] = _metricas(pares, d, k)
     return {"T": t.isoformat(), "n": len(itens), "preditores": preditores, "itens": itens}
+
+
+def _metricas_de(desfecho: str) -> tuple[str, ...]:
+    return ("spearman", "precision_at_k") + (("taxa_base", "auc") if desfecho in BINARIOS else ())
+
+
+def _comparacao(cortes: list[dict], source: str) -> dict:
+    """score − baseline em cada corte, agrupado por dia (UTC) para o IC."""
+    preditores = FONTES[source]["preditores"]
+    saida = {}
+    for base in preditores[1:]:
+        saida[base] = {}
+        for d in FONTES[source]["desfechos"]:
+            saida[base][d] = {}
+            for m in _metricas_de(d):
+                if m == "taxa_base":
+                    continue
+                por_dia: dict[str, list[float]] = {}
+                for c in cortes:
+                    a = c["preditores"][preditores[0]][d][m]
+                    b = c["preditores"][base][d][m]
+                    if a is not None and b is not None:
+                        por_dia.setdefault(c["T"][:10], []).append(a - b)
+                saida[base][d][m] = ic_bootstrap_por_bloco(por_dia)
+    return saida
+
+
+def _percentil(itens: list[dict], campo: str, valor: float) -> float:
+    """Fração do corte com `campo` abaixo de `valor` (empate conta meio)."""
+    vals = [i[campo] for i in itens if i[campo] is not None]
+    abaixo = sum(1 for v in vals if v < valor) + 0.5 * sum(1 for v in vals if v == valor)
+    return abaixo / len(vals)
+
+
+def _eventos(cortes: list[dict]) -> list[dict]:
+    """Cada subida forte, uma vez por produto: a primeira vez que aparece."""
+    vistos, eventos = set(), []
+    for c in cortes:
+        for i in c["itens"]:
+            if i.get("subida_forte") != 1 or i["product_id"] in vistos:
+                continue
+            vistos.add(i["product_id"])
+            eventos.append(
+                {
+                    "T": c["T"],
+                    "product_id": i["product_id"],
+                    "title": i["title"],
+                    "category": i["category"],
+                    "pos_T": i["pos_T"],
+                    "pos_futura": i["pos_futura"],
+                    # Onde o produto estava no corte antes de subir, por preditor
+                    "pct_score": _percentil(c["itens"], "score", i["score"]),
+                    "pct_posicao": _percentil(c["itens"], "posicao_atual", i["posicao_atual"]),
+                }
+            )
+    return eventos
 
 
 def _proximo(cortes_ts: list[dt.datetime], t: dt.datetime, horizon_hours: float):
@@ -252,6 +329,7 @@ def run_backtest(
     limit_products: int | None = None,
     k: int = 3,
     min_pool: int = 5,
+    subida: int = SUBIDA_FORTE,
 ) -> dict:
     if limit_products is None:
         limit_products = settings.TREND_MAX_PRODUCTS
@@ -271,6 +349,7 @@ def run_backtest(
             limit_products=limit_products,
             k=k,
             min_pool=min_pool,
+            subida=subida,
         )
         if c is None:
             pulados += 1
@@ -279,10 +358,7 @@ def run_backtest(
 
     resumo = {
         p: {
-            d: {
-                m: summarize([c["preditores"][p][d][m] for c in cortes])
-                for m in ("spearman", "precision_at_k") + (("taxa_base",) if d in BINARIOS else ())
-            }
+            d: {m: summarize([c["preditores"][p][d][m] for c in cortes]) for m in _metricas_de(d)}
             for d in FONTES[source]["desfechos"]
         }
         for p in FONTES[source]["preditores"]
@@ -295,11 +371,14 @@ def run_backtest(
             "limit_products": limit_products,
             "k": k,
             "min_pool": min_pool,
+            "subida": subida,
             "normalizacao": settings.SCORE_NORMALIZATION,
         },
         "cortes": cortes,
         "cortes_pulados": pulados,
         "resumo": resumo,
+        "comparacao": _comparacao(cortes, source),
+        "eventos": _eventos(cortes) if source == "mercadolivre" else [],
     }
 
 
@@ -324,17 +403,63 @@ def _tabela(rel: dict) -> str:
     linhas += [
         "",
         f"{'preditor':<16}{'desfecho':<16}{'spearman':>10}{'prec@k':>10}{'cortes':>8}"
-        f"{'base':>8}",
+        f"{'base':>8}{'auc':>8}",
     ]
     for p, por_d in rel["resumo"].items():
         for d, m in por_d.items():
-            # Desfecho 0/1: prec@k é o acerto no top-k; compare com a taxa base
+            # Desfecho 0/1: prec@k é o acerto no top-k; compare com a taxa base.
+            # AUC 0,5 = acaso
             base = _fmt(m["taxa_base"]["media"]) if "taxa_base" in m else ""
+            area = _fmt(m["auc"]["media"]) if "auc" in m else ""
             linhas.append(
                 f"{p:<16}{d:<16}{_fmt(m['spearman']['media']):>10}"
                 f"{_fmt(m['precision_at_k']['media']):>10}{m['spearman']['n']:>8}{base:>8}"
+                f"{area:>8}"
             )
+    linhas += _tabela_comparacao(rel) + _tabela_eventos(rel)
     return "\n".join(linhas)
+
+
+def _ic(r: dict | None) -> str:
+    if r is None:
+        return "  sem 2 dias"
+    sinal = "  ← não é sorte" if r["ic_sup"] < 0 or r["ic_inf"] > 0 else ""
+    return (
+        f"{_fmt(r['media'])} [{_fmt(r['ic_inf'])}, {_fmt(r['ic_sup'])}] ({r['blocos']} dias){sinal}"
+    )
+
+
+def _tabela_comparacao(rel: dict) -> list[str]:
+    linhas = ["", "score − baseline (média por dia, IC 95% por bootstrap de dias):"]
+    for base, por_d in rel["comparacao"].items():
+        for d, por_m in por_d.items():
+            for m, r in por_m.items():
+                linhas.append(f"  − {base:<14}{d:<16}{m:<16}{_ic(r)}")
+    return linhas
+
+
+def _tabela_eventos(rel: dict) -> list[str]:
+    if rel["params"]["source"] != "mercadolivre":
+        return []
+    ev = rel["eventos"]
+    linhas = [
+        "",
+        f"Subidas fortes (≥ {rel['params']['subida']} posições até a coleta seguinte): "
+        f"{len(ev)} produtos",
+    ]
+    if ev:
+        media = sum(e["pct_score"] for e in ev) / len(ev)
+        media_pos = sum(e["pct_posicao"] for e in ev) / len(ev)
+        linhas.append(
+            f"  no corte de antes, percentil médio pelo score {media:.2f} e pela posição "
+            f"{media_pos:.2f} (0,5 = no meio do ranking)"
+        )
+    for e in ev[:10]:
+        linhas.append(
+            f"  {e['T'][:16]}  {e['pos_T']:>2}º → {e['pos_futura']:>2}º  "
+            f"score p{100 * e['pct_score']:.0f}  {e['title']}"
+        )
+    return linhas
 
 
 def main() -> int:
@@ -348,6 +473,9 @@ def main() -> int:
     parser.add_argument("--limit-products", type=int, default=None)
     parser.add_argument("--k", type=int, default=3)
     parser.add_argument("--min-pool", type=int, default=5)
+    parser.add_argument(
+        "--subida", type=int, default=SUBIDA_FORTE, help="posições que contam como subida forte"
+    )
     parser.add_argument("--json", action="store_true", help="relatório completo em JSON")
     args = parser.parse_args()
 
@@ -359,6 +487,7 @@ def main() -> int:
         limit_products=args.limit_products,
         k=args.k,
         min_pool=args.min_pool,
+        subida=args.subida,
     )
     print(json.dumps(rel, ensure_ascii=False, default=str) if args.json else _tabela(rel))
     return 0

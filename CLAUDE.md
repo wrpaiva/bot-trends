@@ -601,8 +601,13 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   `posicao_atual` e `preco`; quem some do top 20 vale 21º só se a categoria foi coletada. Os
   cortes são os instantes da própria fonte, e o horizonte aceita a leitura a partir de 0,9× (a
   coleta de 6 h sai com 5,99 h — sem a folga, metade dos cortes sumia). Em 2026-10-14 (8 dias)
-  o score do ML **perdeu para a posição atual** (prec@5 0,71 × 0,95): rode de novo com 2–3
-  semanas antes de mexer nos pesos.
+  o score do ML **perdeu para a posição atual** (prec@5 0,71 × 0,95). **Em 2026-10-18 (12 dias,
+  TIE-23)** o relatório ganhou `subida_forte` (o "viralizou" do ML), AUC nos desfechos 0/1 e
+  `score − baseline` com IC 95% por bootstrap de **dias** — cortes do mesmo dia não são
+  independentes; não troque por bootstrap de cortes, que encolhe o intervalo à toa. Resultado: a
+  perda para a posição não é sorte (prec@5 −0,33 [−0,43, −0,22]), o empate em quem sobe também não
+  muda, e subida de 10+ posições no top 20 é rara (2 em 12 dias). **Não mexa nos pesos do ML
+  esperando ganho**: o score só agrega com um sinal que a posição não tem (README, "Backtest").
 - **Recriar o beat atrasava toda task agendada pelo intervalo inteiro.** O `celerybeat-schedule`
   ficava na camada do container: todo `up -d --build` o zerava, e o Celery conta o intervalo a
   partir da subida — o `collect_ml` (6 h) ficava até 6 h sem rodar a cada deploy (visto em

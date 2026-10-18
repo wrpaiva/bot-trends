@@ -502,21 +502,52 @@ desfechos `posicao_futura`, `ganho_posicoes` e `entrou_top5` (0/1, só quem esta
 `prec@k` vira acerto no top-k, compare com a coluna `base`, a fração que entrou). Quem some do
 ranking conta como 21º, se a categoria dele foi coletada naquele instante.
 
-**Resultado preliminar em 2026-10-14** (8 dias de coleta, 26 coletas, até 84 produtos por corte;
-`--k 5`). Spearman / prec@5, média dos cortes:
+Desde a TIE-23 o relatório traz mais três coisas:
+- **`subida_forte`** (0/1): o produto ganhou `--subida` posições (default 10) até a coleta seguinte.
+  É o "viralizou" do ML; só vale para quem estava abaixo dessa posição em T. Desfecho 0/1 ganha a
+  coluna **`auc`**: a chance de um produto que subiu ter preditor maior que um que não subiu
+  (0,5 = acaso).
+- **`score − baseline`** com **intervalo de 95% por bootstrap de dias**. Cortes do mesmo dia veem
+  quase o mesmo ranking e não são amostras independentes. Por isso cada dia vira uma média, e os
+  dias é que são reamostrados. Intervalo que não cruza o zero aparece marcado `← não é sorte`.
+- **Lista das subidas fortes**, uma por produto, com a data, a posição de antes e de depois e o
+  percentil em que o score punha o produto no corte anterior.
+
+**Resultado em 2026-10-18** (12 dias de coleta, 11 dias com corte, 40 cortes de até 84 produtos;
+`--k 5`). Spearman / prec@5 (AUC nos desfechos 0/1), média dos cortes:
 
 | Horizonte | Desfecho | `score` | `posicao_atual` | `preco` |
 |---|---|---|---|---|
-| 6 h | `posicao_futura` | +0,95 / 0,71 | **+0,97 / 0,95** | −0,31 / 0,13 |
-| 6 h | `ganho_posicoes` | −0,06 / 0,08 | −0,06 / 0,05 | +0,04 / 0,17 |
-| 24 h | `posicao_futura` | +0,92 / 0,74 | **+0,94 / 0,92** | −0,35 / 0,13 |
-| 24 h | `entrou_top5` (base 0,02) | +0,24 / 0,11 | +0,23 / 0,12 | +0,17 / 0,03 |
+| 6 h | `posicao_futura` | +0,95 / 0,70 | **+0,97 / 0,97** | −0,19 / 0,16 |
+| 6 h | `ganho_posicoes` | −0,01 / 0,06 | −0,01 / 0,04 | +0,02 / 0,11 |
+| 6 h | `entrou_top5` (base 0,01) | AUC 0,63 | AUC 0,67 | AUC 0,54 |
+| 24 h | `posicao_futura` | +0,93 / 0,72 | **+0,95 / 0,96** | −0,20 / 0,16 |
+| 24 h | `entrou_top5` (base 0,02) | AUC 0,83 | AUC 0,84 | AUC 0,69 |
 
-Leitura: o score do ML **não bate a posição atual** — ele é quase a posição (que virou dimensão
-na TIE-48) com ruído da subida no ranking e do preço, e erra mais o top 5 seguinte. Ninguém prevê
-quem vai ganhar posições, e entrar no top 5 é raro demais (1–2% por corte, 10 cortes com evento)
-para separar score de baseline. Só `posicao_futura` tem sinal, e é persistência. **Rode de novo
-com 2 a 3 semanas de coleta** antes de mexer nos pesos do ML.
+`score − posicao_atual`, IC 95% por dia:
+
+| Horizonte | Desfecho | Métrica | Diferença |
+|---|---|---|---|
+| 6 h | `posicao_futura` | prec@5 | **−0,33 [−0,43, −0,22]** |
+| 24 h | `posicao_futura` | prec@5 | **−0,27 [−0,40, −0,14]** |
+| 6 h e 24 h | `ganho_posicoes`, `entrou_top5` | todas | ≈ 0, intervalo cruza o zero |
+
+Subidas fortes: com 10 posições, 2 produtos em 12 dias. Com `--subida 5`, 4 (6 h) e 5 (24 h).
+No corte anterior, o score punha esses produtos no percentil 0,26–0,31 e a posição atual no
+0,25–0,29. AUC 0,38: os dois ficam **abaixo do acaso**, porque quem sobe vem de baixo.
+
+**Conclusão: no Mercado Livre, o score não agrega sobre o ranking do próprio `/highlights`.**
+1. Ele perde para a posição atual em prever a posição seguinte, e a diferença não é sorte: 11 dias,
+   intervalo longe do zero, mesmo quadro de 14/10 com 8 dias.
+2. Para quem vai subir, que é o que importa, ele empata com a posição. O empate está nos dois
+   sentidos: nenhum dos dois prevê quem ganha posições.
+3. Subida forte no top 20 é rara demais (2 a 5 em 12 dias, em ~80 produtos) para treinar ou
+   validar um preditor com esta coleta.
+
+Esperar mais dias não muda isso: a diferença já é estável e o evento que importa é raro. O que muda
+a resposta é **um sinal que a posição não tem**: a demanda de `/trends/MLB/{categoria}` (termos mais
+buscados, TIE-51), o vídeo do TikTok ligado ao produto (TIE-18, parte 2) ou uma coleta mais larga
+que o top 20. Sem isso, mexer nos pesos do ML só reordena o mesmo ruído.
 
 ---
 

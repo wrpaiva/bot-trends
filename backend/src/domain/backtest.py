@@ -9,13 +9,19 @@ as métricas de ranking; montar os cortes é com `apps/backtest`.
 - `spearman`: correlação entre as ordens (1 = mesma ordem, -1 = inversa).
 - `precision_at_k`: fração do top-k previsto que está no top-k real.
 - `acerto_top_k`: para desfecho 0/1 (TIE-46), fração do top-k previsto com 1.
+- `auc`: para desfecho 0/1 raro, chance de um positivo ter score maior que um
+  negativo (0,5 = acaso). Não depende de k nem da taxa base.
+- `ic_bootstrap_por_bloco`: intervalo de confiança da média reamostrando dias
+  inteiros. Cortes do mesmo dia veem quase o mesmo ranking; reamostrar corte
+  a corte fingiria uma amostra muito maior do que ela é.
 """
 
 from __future__ import annotations
 
 import math
+import random
 import statistics
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 
 def _postos(valores: Sequence[float]) -> list[float]:
@@ -84,3 +90,47 @@ def summarize(valores: Sequence[float | None]) -> dict[str, float | int | None]:
     """Média dos cortes que tiveram valor definido."""
     validos = [v for v in valores if v is not None]
     return {"media": statistics.fmean(validos) if validos else None, "n": len(validos)}
+
+
+def auc(previsto: Sequence[float], desfecho: Sequence[int]) -> float | None:
+    """
+    Área sob a curva ROC (Mann-Whitney): fração dos pares (positivo, negativo)
+    em que o positivo tem previsto maior; empate vale 1/2. None sem as duas
+    classes.
+    """
+    if len(previsto) != len(desfecho):
+        raise ValueError("previsto e desfecho precisam ter o mesmo tamanho")
+    n_pos = sum(1 for d in desfecho if d)
+    n_neg = len(desfecho) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return None
+    postos = _postos(previsto)
+    soma = sum(p for p, d in zip(postos, desfecho, strict=True) if d)
+    return (soma - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+def ic_bootstrap_por_bloco(
+    blocos: Mapping[str, Sequence[float]],
+    *,
+    reps: int = 2000,
+    nivel: float = 0.95,
+    seed: int = 0,
+) -> dict[str, float | int] | None:
+    """
+    Média dos blocos e intervalo de confiança dela (bootstrap percentil,
+    blocos sorteados com reposição). Cada bloco pesa igual, qualquer que seja
+    o nº de valores dele. None com menos de 2 blocos com valor.
+    """
+    medias = [statistics.fmean(v) for _, v in sorted(blocos.items()) if v]
+    if len(medias) < 2:
+        return None
+    rng = random.Random(seed)
+    n = len(medias)
+    amostras = sorted(statistics.fmean(rng.choices(medias, k=n)) for _ in range(reps))
+    alfa = (1 - nivel) / 2
+    return {
+        "media": statistics.fmean(medias),
+        "ic_inf": amostras[int(alfa * reps)],
+        "ic_sup": amostras[min(reps - 1, math.ceil((1 - alfa) * reps) - 1)],
+        "blocos": n,
+    }

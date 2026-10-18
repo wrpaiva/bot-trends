@@ -149,3 +149,70 @@ def test_main_aceita_a_fonte(db, monkeypatch, capsys):
     saida = capsys.readouterr().out
     assert "mercadolivre" in saida
     assert "entrou_top5" in saida
+
+
+# --- subida forte, AUC, comparação por dia (TIE-23) -----------------------------
+
+
+def test_subida_forte_so_vale_para_quem_podia_subir_tanto(db):
+    rel, itens = _corte(db, subida=3)
+    # m5: 6º → 2º, ganhou 4 ≥ 3
+    assert itens["m5"]["subida_forte"] == 1
+    assert itens["m6"]["subida_forte"] == 0
+    # Do 1º ao 3º não dá para ganhar 3 posições: não se aplica
+    assert itens["m2"]["subida_forte"] is None
+    m = rel["cortes"][0]["preditores"]["posicao_atual"]["subida_forte"]
+    # Candidatos m3..m7 (4º a 8º), só m5 subiu; posição atual põe m3, m4 acima dele
+    assert m["taxa_base"] == pytest.approx(1 / 5)
+    assert m["auc"] == pytest.approx(2 / 4)
+
+
+def test_eventos_listam_cada_subida_uma_vez_com_data_e_percentil(db):
+    rel, _ = _corte(db, subida=3)
+    (ev,) = rel["eventos"]
+    assert ev["product_id"] == "m5" and ev["T"] == T0.isoformat()
+    assert (ev["pos_T"], ev["pos_futura"]) == (6, 2)
+    # 6º de 8: dois abaixo (7º e 8º) e ele mesmo como meio empate → 2,5/8
+    assert ev["pct_posicao"] == pytest.approx(2.5 / 8)
+    assert 0 <= ev["pct_score"] <= 1
+
+
+def test_comparacao_precisa_de_dois_dias(db):
+    rel, _ = _corte(db)
+    assert rel["comparacao"]["posicao_atual"]["posicao_futura"]["spearman"] is None
+    assert set(rel["comparacao"]) == {"posicao_atual", "preco"}
+
+
+def test_comparacao_agrupa_os_cortes_por_dia(db):
+    # Mesmo ranking um dia depois: dois dias, um corte em cada
+    d1, d1b = T0 + dt.timedelta(days=1), T1 + dt.timedelta(days=1)
+    for n, (pid, (antes, depois)) in enumerate(POSICOES.items()):
+        _leitura(db, pid, d1, antes, preco=10.0 * (n + 1))
+        if depois is not None:
+            _leitura(db, pid, d1b, depois, preco=10.0 * (n + 1))
+    rel = bt.run_backtest(db, source="mercadolivre", horizon_hours=6, k=2, min_pool=3)
+
+    r = rel["comparacao"]["posicao_atual"]["posicao_futura"]["spearman"]
+    assert r["blocos"] == 2
+    por_corte = [
+        c["preditores"]["score"]["posicao_futura"]["spearman"]
+        - c["preditores"]["posicao_atual"]["posicao_futura"]["spearman"]
+        for c in rel["cortes"]
+        if c["T"][:10] in (T0.isoformat()[:10], d1.isoformat()[:10])
+    ]
+    assert r["ic_inf"] <= r["media"] <= r["ic_sup"]
+    assert min(por_corte) - 1e-9 <= r["media"] <= max(por_corte) + 1e-9
+
+
+def test_tabela_mostra_comparacao_e_subidas(db, monkeypatch, capsys):
+    import src.infrastructure.db.mongo as mongo
+
+    monkeypatch.setattr(mongo, "get_db", lambda: db)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["backtest", "--source", "mercadolivre", "--min-pool", "3", "--subida", "3"],
+    )
+    assert bt.main() == 0
+    saida = capsys.readouterr().out
+    assert "score − baseline" in saida and "sem 2 dias" in saida
+    assert "Subidas fortes (≥ 3 posições" in saida and "Item m5" in saida
