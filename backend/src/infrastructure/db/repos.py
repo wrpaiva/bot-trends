@@ -118,3 +118,48 @@ class MetricsRepo:
 
     def insert(self, metric: dict[str, Any]) -> None:
         self.col.insert_one(metric)
+
+
+def onde_comprar(db: Database, produtos: dict[str, dict]) -> dict[str, dict]:
+    """
+    product_id do vídeo → produto do ML vinculado, com preço e link (TIE-52).
+    Só entra quem já tem `ml_offers` lido; o preço é o do buy box quando
+    existe, senão a menor oferta (que pode ser anúncio fora da curva).
+    """
+    vinculo = {
+        pid: (p.get("ml_match") or {}).get("ml_product_id")
+        for pid, p in produtos.items()
+        if (p.get("ml_match") or {}).get("status") == "vinculado"
+    }
+    if not vinculo:
+        return {}
+    ofertas = {
+        p["product_id"]: p["ml_offers"]
+        for p in db["products"].find(
+            {"product_id": {"$in": sorted({v for v in vinculo.values() if v})}},
+            {"_id": 0, "product_id": 1, "ml_offers": 1},
+        )
+        if p.get("ml_offers")
+    }
+    saida = {}
+    for video, ml_pid in vinculo.items():
+        o = ofertas.get(ml_pid)
+        if o is None:
+            continue
+        preco = o.get("preco_buybox") if o.get("preco_buybox") is not None else o.get("preco_min")
+        # Sem página de produto (vendido fora do catálogo), a busca pelo nome
+        link = o.get("permalink") or o.get("busca")
+        if not link:
+            continue
+        saida[video] = {
+            "nome": o.get("nome"),
+            "link": link,
+            "link_tipo": "produto" if o.get("permalink") else "busca",
+            "preco": preco,
+            "preco_min": o.get("preco_min"),
+            "moeda": o.get("moeda"),
+            "n_ofertas": o.get("n_ofertas"),
+            "disponivel": o.get("disponivel", True),
+            "atualizado_em": o.get("ts"),
+        }
+    return saida

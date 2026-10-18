@@ -54,3 +54,20 @@ export function ultimaRequisicao() {
     },
   };
 }
+
+// Vídeo vinculado: onde comprar no ML (TIE-52). null sem vínculo, sem oferta
+// lida ou com o produto fora do catálogo — a tela simplesmente não mostra.
+const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+
+export function ofertaML(item) {
+  const o = item?.ml_offer;
+  if (!o || o.disponivel === false || !o.link) return null;
+  const partes = [];
+  if (o.preco != null) partes.push(BRL.format(o.preco));
+  if (o.n_ofertas) partes.push(`${o.n_ofertas} ${o.n_ofertas === 1 ? "oferta" : "ofertas"}`);
+  // Vendido fora do catálogo: o link é a busca do ML pelo nome, sem preço
+  const busca = o.link_tipo === "busca";
+  if (!partes.length) partes.push(busca ? "ver anúncios" : "sem anúncio ativo");
+  const nome = o.nome || "produto no Mercado Livre";
+  return { nome: busca ? `buscar ${nome}` : nome, link: o.link, resumo: partes.join(" · ") };
+}

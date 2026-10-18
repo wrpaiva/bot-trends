@@ -639,8 +639,14 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
   compilado em lista a um dos itens (6/8); com o filtro de público e o exemplo de lista no prompt,
   7/7. **Mudou o prompt? Suba `EXTRACTION_PROMPT_VERSION`** e reprocesse (status gravado não volta
   a rodar). Revalide sobre uma **cópia** dos vídeos num banco descartável, com o token lido do banco
-  real — nunca copie `ml_oauth`: o refresh token é de uso único. O sinal social no score do ML é a
-  parte 2.
+  real — nunca copie `ml_oauth`: o refresh token é de uso único. A parte 2 (sinal social no score do
+  ML) foi **redefinida na TIE-52** (2026-10-18): nenhum dos 7 vinculados está no `/highlights`
+  (28 listas, da folha à raiz), então o vídeo **não entra no score do ML**, porque não haveria
+  desfecho para medir. O vínculo diz onde comprar: `ml_offers` no produto do ML
+  (`tasks.refresh_ml_offers`, 6 h), `ml_offer` no ranking e linha 🛒 no alerta. **Não grave
+  `ml_offers` como leitura em `metrics`**: o produto entraria no ranking e no percentil do ML só
+  com preço. O texto do alerta agora escapa HTML (`parse_mode=HTML`: um "&" no título fazia o
+  Telegram recusar a mensagem).
 
 ---
 

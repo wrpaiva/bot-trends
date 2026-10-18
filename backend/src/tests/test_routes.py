@@ -319,6 +319,93 @@ def test_ranking_filtra_por_categoria_e_mostra_o_nome(client, db):
     assert [i["product_id"] for i in so_cozinha["items"]] == ["panela"]
 
 
+def test_video_vinculado_mostra_onde_comprar_no_ml(client, db):
+    # TIE-52: a tendência é do vídeo; o produto do ML vinculado diz onde comprar
+    ofertas = {
+        "catalog_id": "MLB77",
+        "nome": "Kit Brocas 9 Peças",
+        "permalink": "https://www.mercadolivre.com.br/p/MLB77",
+        "preco_min": 25.5,
+        "preco_buybox": 29.9,
+        "moeda": "BRL",
+        "n_ofertas": 4,
+        "disponivel": True,
+        "ts": utcnow(),
+    }
+    db["products"].insert_many(
+        [
+            {
+                "product_id": "video",
+                "source": "tiktok",
+                "title": "kit brocas #achadinhos",
+                "ml_match": {"status": "vinculado", "ml_product_id": "brocas"},
+            },
+            {
+                "product_id": "sem_vinculo",
+                "source": "tiktok",
+                "title": "dança",
+                "ml_match": {"status": "sem_produto"},
+            },
+            {"product_id": "brocas", "source": "mercadolivre", "ml_offers": ofertas},
+            {
+                "product_id": "video2",
+                "source": "tiktok",
+                "title": "garrafa",
+                "ml_match": {"status": "vinculado", "ml_product_id": "garrafa"},
+            },
+            # Vinculado, mas as ofertas ainda não foram lidas
+            {"product_id": "garrafa", "source": "mercadolivre"},
+            {
+                "product_id": "video3",
+                "source": "tiktok",
+                "title": "tábua",
+                "ml_match": {"status": "vinculado", "ml_product_id": "tabua"},
+            },
+            # Vendido fora do catálogo: sem página de produto, vai a busca
+            {
+                "product_id": "tabua",
+                "source": "mercadolivre",
+                "ml_offers": {
+                    **ofertas,
+                    "permalink": None,
+                    "busca": "https://lista.mercadolivre.com.br/tabua-magica",
+                    "preco_min": None,
+                    "preco_buybox": None,
+                    "n_ofertas": 0,
+                },
+            },
+        ]
+    )
+    db["trend_insights"].insert_many(
+        [
+            _insight("video", 70),
+            _insight("sem_vinculo", 60),
+            _insight("video2", 50),
+            _insight("video3", 40),
+        ]
+    )
+
+    itens = {i["product_id"]: i for i in client.get("/rankings/latest").json()["items"]}
+    ml = itens["video"]["ml_offer"]
+    # Buy box quando existe: a menor oferta pode ser anúncio fora da curva
+    assert ml == {
+        "nome": "Kit Brocas 9 Peças",
+        "link": "https://www.mercadolivre.com.br/p/MLB77",
+        "link_tipo": "produto",
+        "preco": 29.9,
+        "preco_min": 25.5,
+        "moeda": "BRL",
+        "n_ofertas": 4,
+        "disponivel": True,
+        "atualizado_em": ml["atualizado_em"],
+    }
+    assert itens["sem_vinculo"]["ml_offer"] is None
+    assert itens["video2"]["ml_offer"] is None
+    busca = itens["video3"]["ml_offer"]
+    assert busca["link"] == "https://lista.mercadolivre.com.br/tabua-magica"
+    assert (busca["link_tipo"], busca["preco"], busca["n_ofertas"]) == ("busca", None, 0)
+
+
 def test_ranking_com_categoria_invalida_da_422(client):
     assert client.get("/rankings/latest", params={"category": "x; drop"}).status_code == 422
 

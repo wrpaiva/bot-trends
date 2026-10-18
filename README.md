@@ -274,7 +274,7 @@ faz o mesmo. O CI faz o build com uma chave-canário e falha se ela aparecer no 
 | `GET /health/ready` | — | Readiness: `ready`; `degraded` (200) com Redis fora ou migração pendente/falha; `unavailable` (503) com Mongo fora. Usado pelo healthcheck do Docker |
 | `GET /health/migrations` | ✅ | Status das últimas migrações: `ok`, `degraded` (alguma falhou) ou `running` |
 | `GET /metrics` | ✅ | Métricas no formato Prometheus: requisições e latência da API por rota, idade da última coleta/insight/backup, fallback do LLM, filas e circuitos (ver "Observabilidade") |
-| `GET /rankings/latest` | ✅ | Ranking por `final_score`, um item por produto (o insight mais recente). Query: `source` (`all`\|`mercadolivre`\|`tiktok`), `limit` (1–200), `hours` (1–720, recência: gerados nas últimas N horas), `window_hours` (opcional: só insights calculados com essa janela), `category` (opcional: `ml_category_id` do produto; tira o TikTok, que não tem categoria), `cursor`. Paginado por cursor. Cada item traz `category_name` (null se a categoria não está cadastrada) |
+| `GET /rankings/latest` | ✅ | Ranking por `final_score`, um item por produto (o insight mais recente). Query: `source` (`all`\|`mercadolivre`\|`tiktok`), `limit` (1–200), `hours` (1–720, recência: gerados nas últimas N horas), `window_hours` (opcional: só insights calculados com essa janela), `category` (opcional: `ml_category_id` do produto; tira o TikTok, que não tem categoria), `cursor`. Paginado por cursor. Cada item traz `category_name` (null se a categoria não está cadastrada) e `ml_offer` (vídeo vinculado: produto do ML com `nome`, `link`, `link_tipo` — `produto` ou `busca` —, `preco`, `n_ofertas`; null sem vínculo) |
 | `GET /insights/latest` | ✅ | Insights gerados nas últimas `hours` horas, do mais novo ao mais antigo. Query: `limit`, `hours`, `window_hours` (opcional), `cursor`. Paginado por cursor |
 | `GET /search` | ✅ | Busca no título (stemming em português, ignora acento), por relevância, com o último score de cada produto. Query: `q` (2–100 caracteres), `page`, `limit` (1–50) |
 | `GET /products/{product_id}/insight/latest` | ✅ | Último insight do produto (404 se não houver) |
@@ -564,6 +564,7 @@ Sem sinal novo, mexer nos pesos do ML só reordena o mesmo ruído.
 | `tasks.collect_ml` | `ml` | a cada 6 h |
 | `tasks.collect_tiktok` | `tiktok` | a cada `TIKTOK_INTERVAL_MIN` minutos (default 120) |
 | `tasks.link_tiktok_ml` | `ml` | a cada `TIKTOK_INTERVAL_MIN` minutos — vincula vídeo comercial do TikTok ao produto do catálogo do ML (ver "Vínculo TikTok → ML") |
+| `tasks.refresh_ml_offers` | `ml` | a cada 6 h — renova preço, ofertas e link do produto do ML vinculado a vídeo (ver "Vínculo TikTok → ML") |
 | `tasks.hybrid_trend_analyze` | `trend` | a cada 30 min |
 | `tasks.system_health_check` | `celery` | a cada 15 min — alerta em `TELEGRAM_SYSTEM_CHAT_ID` se coleta/análise pararem, o LLM cair no fallback demais, a fila acumular ou o backup falhar |
 | `tasks.purge_old_data` | `celery` | a cada 24 h — apaga insight com mais de `INSIGHT_RETENTION_DAYS` (90) e métrica com mais de `METRICS_RETENTION_DAYS` (0 = nunca); ver "Retenção" |
@@ -590,8 +591,23 @@ quando tiver leitura.
 
 Com os 72 vídeos comerciais em português de setembro (2026-10-16): 7 vinculados, todos certos
 pelo critério "mesmo tipo de produto e mesmo público"; 61 sem produto nomeado; 4 recusados (um
-falso negativo: "descascador elétrico cozinha"). O sinal social do vídeo ainda **não** entra no
-score do ML — fica para quando a coleta do TikTok voltar, com backtest antes e depois.
+falso negativo: "descascador elétrico cozinha").
+
+**O vídeo não entra no score do ML** (TIE-52, 2026-10-18). Nenhum dos 7 produtos vinculados
+aparece no `/highlights`: foram conferidas 28 listas, da folha à raiz da categoria de cada um. O
+que os vídeos de achadinhos vendem não está entre os 20 mais vendidos, e sem posição no ranking
+não há desfecho para medir. O vínculo serve para **dizer onde comprar**:
+- o produto do ML ganha `ml_offers` (nome, link, menor preço, buy box, nº de anúncios ativos),
+  gravado ao vincular e renovado a cada 6 h por `tasks.refresh_ml_offers`;
+- não vira leitura em `metrics`, então não entra no ranking nem no percentil do ML;
+- o `/rankings/latest` traz `ml_offer` no vídeo vinculado, o dashboard mostra a linha 🛒 com o
+  link, e o alerta do Telegram ganha "No Mercado Livre: produto · R$ X · N ofertas";
+- o preço mostrado é o do buy box quando existe, senão a menor oferta (que pode ser anúncio fora
+  da curva);
+- **produto vendido fora do catálogo** (os 7 de 7 vinculados em 2026-10-18: página de produto
+  vazia, ofertas 404 "No winners found") recebe o link da **busca do ML pelo nome**
+  (`lista.mercadolivre.com.br/<nome>`, o mesmo formato do `/trends`), sem preço. De um servidor
+  essa página cai na verificação anti-robô do ML; no navegador abre normal.
 
 A análise pontua até `TREND_MAX_PRODUCTS` (default 200) produtos com leitura nas últimas 72 h,
 os de leitura mais recente primeiro (empate desempatado por `product_id`). O que passar do teto

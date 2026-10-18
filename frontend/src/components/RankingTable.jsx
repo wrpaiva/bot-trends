@@ -1,5 +1,5 @@
 import React from "react";
-import { viewState } from "../ranking.js";
+import { ofertaML, viewState } from "../ranking.js";
 import { nomeCategoria } from "../categorias.js";
 
 // Cores por gravidade: o que precisa de atenção salta aos olhos (TIE-28)
@@ -46,6 +46,27 @@ function Aviso({ children, tom = "neutro" }) {
     erro: { background: "#ffecec", color: "#a61e1e" },
   };
   return <div style={{ padding: 24, textAlign: "center", ...cores[tom] }}>{children}</div>;
+}
+
+// Vídeo vinculado: onde comprar no ML (TIE-52). O clique no link não abre o drawer
+function OndeComprar({ item }) {
+  const o = ofertaML(item);
+  if (!o) return null;
+  return (
+    <div style={{ marginTop: 6, fontSize: 12, color: "#555" }}>
+      🛒{" "}
+      <a
+        href={o.link}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        title="Abrir no Mercado Livre"
+      >
+        {o.nome}
+      </a>{" "}
+      · {o.resumo}
+    </div>
+  );
 }
 
 export default function RankingTable({ items, loading, error, sort, onSort, onSelectProduct, onRetry }) {
@@ -139,6 +160,7 @@ export default function RankingTable({ items, loading, error, sort, onSort, onSe
                     >
                       {it.title || it.product_id}
                     </div>
+                    <OndeComprar item={it} />
                   </td>
                   <td style={cel} title={it.category || undefined}>
                     {nomeCategoria(it)}

@@ -13,13 +13,21 @@ Cada vídeo é processado uma vez: o resultado fica em `ml_match.status`
 (`vinculado`, `sem_produto`, `sem_candidato`); só `erro` volta a ser tentado.
 O produto do ML vinculado guarda os vídeos em `linked_videos`, e a análise
 passa a listar `tiktok` nas `sources` dele.
+
+Onde comprar (TIE-52): nenhum produto vinculado estava no `/highlights` (0 de
+7 em 2026-10-18, conferido da folha à raiz da categoria), então o vídeo não
+entra no score do ML. O vínculo serve para dizer onde comprar: `ml_offers` no
+produto do ML (menor preço, buy box, nº de anúncios, link), gravado ao
+vincular e renovado por `refresh_ml_offers`. Não vira leitura em `metrics`: o
+produto não entra no ranking nem no percentil do ML.
 """
 
 import logging
 
 from celery import shared_task
 
-from apps.worker.tasks import _circuito_aberto
+from apps.worker.tasks import _circuito_aberto, _registra
+from apps.worker.tasks import _resultado as _resultado_coleta
 from src.domain.commercial import commercial_marker
 from src.domain.interfaces import ProductExtractor
 from src.domain.product_match import escolhe_candidato
@@ -113,6 +121,25 @@ def _produto_ml(db, candidato) -> str:
             "title": candidato.nome,
         }
     )
+
+
+def _grava_ofertas(db, ml, ml_pid: str, catalog_id: str) -> bool:
+    """
+    Grava em `ml_offers` onde comprar o produto. False se a leitura falhou (o
+    valor anterior fica); `MLAuthError` sobe, porque sem token nada mais anda.
+    """
+    try:
+        oferta = ml.ofertas(catalog_id)
+    except MLAuthError:
+        raise
+    except Exception as e:
+        logger.warning("Ofertas de %s não lidas: %s", catalog_id, e)
+        return False
+    doc = {"catalog_id": catalog_id, **(oferta or {}), "disponivel": oferta is not None}
+    db["products"].update_one(
+        {"product_id": ml_pid}, {"$set": {"ml_offers": {**doc, "ts": utcnow()}}}
+    )
+    return True
 
 
 def _resultado(contagem: dict, errors: int) -> dict:
@@ -223,6 +250,11 @@ def link_tiktok_ml(limit: int | None = None):
                     score=round(escolha.score, 3),
                 )
                 contagem["linked"] += 1
+                # Onde comprar já no vínculo; se falhar, a renovação refaz
+                try:
+                    _grava_ofertas(db, ml, ml_pid, escolha.candidato.product_id)
+                except MLAuthError as e:
+                    logger.warning("Ofertas de %s sem token: %s", escolha.candidato.product_id, e)
             ml_erros = ml.errors
     finally:
         auth.close()
@@ -234,4 +266,50 @@ def link_tiktok_ml(limit: int | None = None):
     else:
         breaker.record_success()
     logger.info("vinculo.tiktok_ml", extra=resultado)
+    return resultado
+
+
+@shared_task(name="tasks.refresh_ml_offers")
+def refresh_ml_offers():
+    """Renova `ml_offers` dos produtos do ML com vídeo vinculado (TIE-52)."""
+    db = get_db()
+    alvos = list(
+        db["products"].find(
+            {"source": "mercadolivre", "linked_videos": {"$exists": True, "$ne": []}},
+            {"_id": 0, "product_id": 1, "source_product_id": 1},
+        )
+    )
+    if not alvos:
+        return _resultado_coleta(0, 0)
+
+    try:
+        auth = MercadoLivreAuth.from_settings(db)
+    except MLAuthError as e:
+        logger.error("Ofertas do ML sem credenciais: %s", e)
+        return {"status": "error", "inserted": 0, "errors": 1, "reason": str(e)}
+
+    breaker = _breaker("mercadolivre")
+    try:
+        if aberto := _circuito_aberto(breaker, "mercadolivre"):
+            return aberto
+        lidos = erros = 0
+        with MercadoLivreCollector(categories=[], auth=auth) as ml:
+            for a in alvos:
+                try:
+                    ok = _grava_ofertas(db, ml, a["product_id"], a["source_product_id"])
+                except MLAuthError as e:
+                    # Token é config, não falha do serviço: não mexe no circuito
+                    logger.error("Ofertas do ML interrompidas: %s", e)
+                    return {
+                        "status": "error",
+                        "inserted": lidos,
+                        "errors": erros + 1,
+                        "reason": str(e),
+                    }
+                lidos += ok
+                erros += not ok
+    finally:
+        auth.close()
+    resultado = _registra(breaker, _resultado_coleta(lidos, erros))
+    logger.info("ofertas.ml", extra=resultado)
     return resultado

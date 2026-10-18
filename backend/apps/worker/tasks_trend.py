@@ -1,6 +1,7 @@
 # apps/worker/tasks_trend.py
 
 import datetime as dt
+import html
 import logging
 
 import redis
@@ -20,6 +21,7 @@ from src.infrastructure.circuit_breaker import BreakerLLMClient, breaker_for
 from src.infrastructure.config import settings
 from src.infrastructure.db.alert_repos import AlertStateRepo
 from src.infrastructure.db.mongo import get_db
+from src.infrastructure.db.repos import onde_comprar
 from src.infrastructure.db.trend_repos import TrendInsightRepo
 from src.infrastructure.llm.cache import RedisLLMCache
 from src.infrastructure.llm.openai_compatible import OpenAICompatibleLLMClient
@@ -287,6 +289,44 @@ def _produtos_ativos(
     return [row["_id"] for row in db["metrics"].aggregate(pipeline)]
 
 
+def _brl(valor: float) -> str:
+    """29.9 → "R$ 29,90"; 1299.9 → "R$ 1.299,90"."""
+    return "R$ " + f"{valor:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def _oferta_do_video(db, product_id: str) -> dict | None:
+    """Produto do ML vinculado ao vídeo, com preço e link (TIE-52)."""
+    p = db["products"].find_one({"product_id": product_id}, {"_id": 0, "ml_match": 1})
+    return onde_comprar(db, {product_id: p or {}}).get(product_id)
+
+
+def _texto_alerta(titulo: str | None, result, oferta: dict | None) -> str:
+    """
+    Mensagem do alerta, em HTML do Telegram: todo texto que vem de fora é
+    escapado (um "&" no título fazia o Telegram recusar a mensagem). Vídeo
+    vinculado ganha a linha de onde comprar no ML (TIE-52).
+    """
+    e = html.escape
+    linhas = [
+        "📈 Tendência detectada",
+        f"Produto: {e(titulo or '')}",
+        f"Score: {result.final_score_0_100}",
+        f"Status: {e(str(result.trend_classification))}",
+        f"Risco: {e(str(result.risk_level))}",
+    ]
+    if oferta and oferta.get("disponivel") and oferta.get("link"):
+        nome = e(oferta.get("nome") or "produto")
+        if oferta.get("link_tipo") == "busca":
+            nome = f"buscar {nome}"
+        partes = [f'<a href="{e(oferta["link"], quote=True)}">{nome}</a>']
+        if oferta.get("preco") is not None:
+            partes.append(_brl(oferta["preco"]))
+        if oferta.get("n_ofertas"):
+            partes.append(f"{oferta['n_ofertas']} ofertas")
+        linhas.append("🛒 No Mercado Livre: " + " · ".join(partes))
+    return "\n".join(linhas) + f"\n\n{e(result.recommendation or '')}"
+
+
 @shared_task(name="tasks.hybrid_trend_analyze")
 def hybrid_trend_analyze(
     hours: int = 72, limit_products: int | None = None, alert_threshold: float | None = None
@@ -412,14 +452,7 @@ def hybrid_trend_analyze(
             continue
 
         try:
-            notifier.send(
-                f"📈 Tendência detectada\n"
-                f"Produto: {ti.title}\n"
-                f"Score: {result.final_score_0_100}\n"
-                f"Status: {result.trend_classification}\n"
-                f"Risco: {result.risk_level}\n\n"
-                f"{result.recommendation}"
-            )
+            notifier.send(_texto_alerta(ti.title, result, _oferta_do_video(db, product_id)))
         except TelegramError as e:
             # Não grava estado: o próximo ciclo tenta de novo
             logger.warning("Alerta de %s não enviado: %s", product_id, e)
