@@ -168,10 +168,17 @@ def test_sem_indice_de_texto_devolve_503_com_instrucao(monkeypatch, mongo):
 
 @pytest.mark.parametrize(
     ("filtro_extra", "indice"),
-    [({}, "ix_trend_ts"), ({"window_hours": 72}, "ix_trend_window_ts")],
+    [({}, "ix_trend_ts_id"), ({"window_hours": 72}, "ix_trend_window_ts_id")],
 )
 def test_indice_cobre_o_filtro_das_listagens(db, filtro_extra, indice):
-    """TIE-32/28: ranking e insights filtram por ts (e por window_hours, se pedido)."""
+    """
+    TIE-32/28: ranking e insights filtram por ts (e por window_hours, se pedido)
+    e ordenam por (ts, _id). TIE-50: sem `_id` no índice, cada página ordenava a
+    janela inteira em memória (4.394 docs em 24 h para devolver 51).
+    """
+    db["trend_insights"].insert_many(
+        [{"ts": utcnow(), "window_hours": 72, "product_id": f"p{i}"} for i in range(5)]
+    )
     plano = (
         db["trend_insights"]
         .find({"ts": {"$gte": utcnow() - dt.timedelta(hours=72)}, **filtro_extra})
@@ -180,6 +187,7 @@ def test_indice_cobre_o_filtro_das_listagens(db, filtro_extra, indice):
     )
     texto = str(plano["queryPlanner"]["winningPlan"])
     assert "IXSCAN" in texto and indice in texto
+    assert "'stage': 'SORT'" not in texto
 
 
 # --- Idioma do vídeo x índice de texto -------------------------------------------
