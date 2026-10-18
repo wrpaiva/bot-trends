@@ -1,7 +1,19 @@
 import React from "react";
 import { opcoesDoFiltro, rotuloCategoria } from "../categorias.js";
 
-export default function Filters({ hours, setHours, source, setSource, limit, setLimit, category, setCategory, categorias }) {
+export default function Filters({
+  hours,
+  setHours,
+  source,
+  setSource,
+  limit,
+  setLimit,
+  category,
+  setCategory,
+  categorias,
+  withOffer,
+  setWithOffer,
+}) {
   return (
     <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
       <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -37,6 +49,15 @@ export default function Filters({ hours, setHours, source, setSource, limit, set
             </option>
           ))}
         </select>
+      </label>
+
+      <label
+        style={{ display: "flex", gap: 6, alignItems: "center" }}
+        title="Vídeos do TikTok ligados a um produto do Mercado Livre"
+      >
+        {/* TIE-53: os vinculados ficam espalhados entre centenas de vídeos */}
+        <input type="checkbox" checked={withOffer} onChange={(e) => setWithOffer(e.target.checked)} />
+        Só com onde comprar 🛒
       </label>
 
       <label style={{ display: "flex", gap: 8, alignItems: "center" }}>

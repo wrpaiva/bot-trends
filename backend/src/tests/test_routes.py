@@ -406,6 +406,74 @@ def test_video_vinculado_mostra_onde_comprar_no_ml(client, db):
     assert (busca["link_tipo"], busca["preco"], busca["n_ofertas"]) == ("busca", None, 0)
 
 
+def _vinculos_com_e_sem_oferta(db):
+    oferta = {
+        "nome": "Kit",
+        "permalink": None,
+        "busca": "https://lista.mercadolivre.com.br/kit",
+        "disponivel": True,
+    }
+    db["products"].insert_many(
+        [
+            {
+                "product_id": f"v{n}",
+                "source": "tiktok",
+                "title": f"vídeo {n}",
+                "ml_match": {"status": "vinculado", "ml_product_id": f"ml{n}"},
+            }
+            for n in range(3)
+        ]
+        + [
+            {"product_id": "ml0", "source": "mercadolivre", "ml_offers": oferta},
+            {"product_id": "ml1", "source": "mercadolivre", "ml_offers": oferta},
+            # Saiu do catálogo: a linha 🛒 não aparece, então o filtro também não pega
+            {
+                "product_id": "ml2",
+                "source": "mercadolivre",
+                "ml_offers": {**oferta, "disponivel": False},
+            },
+            {"product_id": "solto", "source": "tiktok", "title": "dança"},
+            {
+                "product_id": "fone",
+                "source": "mercadolivre",
+                "title": "Fone",
+                "category": "MLB1051",
+            },
+        ]
+    )
+    db["trend_insights"].insert_many(
+        [_insight(p, 90 - n) for n, p in enumerate(("v0", "v1", "v2", "solto"))]
+        + [_insight("fone", 95, sources=("mercadolivre",))]
+    )
+
+
+def test_filtro_so_com_onde_comprar(client, db):
+    _vinculos_com_e_sem_oferta(db)
+    r = client.get("/rankings/latest", params={"with_offer": "true"}).json()
+    assert [i["product_id"] for i in r["items"]] == ["v0", "v1"]
+    assert all(i["ml_offer"] for i in r["items"])
+    # Sem o filtro, nada muda
+    todos = client.get("/rankings/latest").json()["items"]
+    assert len(todos) == 5
+
+
+def test_filtro_com_onde_comprar_pagina_dentro_do_filtro(client, db):
+    _vinculos_com_e_sem_oferta(db)
+    p1 = client.get("/rankings/latest", params={"with_offer": "true", "limit": 1}).json()
+    assert [i["product_id"] for i in p1["items"]] == ["v0"] and p1["has_more"]
+    p2 = client.get(
+        "/rankings/latest",
+        params={"with_offer": "true", "limit": 1, "cursor": p1["next_cursor"]},
+    ).json()
+    assert [i["product_id"] for i in p2["items"]] == ["v1"] and not p2["has_more"]
+
+
+def test_filtro_com_onde_comprar_e_categoria_e_a_intersecao(client, db):
+    _vinculos_com_e_sem_oferta(db)
+    r = client.get("/rankings/latest", params={"with_offer": "true", "category": "MLB1051"})
+    assert r.status_code == 200 and r.json()["items"] == []
+
+
 def test_ranking_com_categoria_invalida_da_422(client):
     assert client.get("/rankings/latest", params={"category": "x; drop"}).status_code == 422
 

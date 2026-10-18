@@ -76,9 +76,11 @@ async function httpPost(path, corpo) {
 
 export const api = {
   // cursor: `next_cursor` da página anterior (TIE-32); omitido na primeira página
-  rankingsLatest: ({ hours, limit, source, category, cursor, signal }) => {
+  rankingsLatest: ({ hours, limit, source, category, withOffer, cursor, signal }) => {
     const q = new URLSearchParams({ hours, limit, source });
     if (category) q.set("category", category);
+    // Só vídeo com onde comprar no ML (TIE-53)
+    if (withOffer) q.set("with_offer", "true");
     if (cursor) q.set("cursor", cursor);
     return httpGet(`/rankings/latest?${q}`, { signal });
   },
