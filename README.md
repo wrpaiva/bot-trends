@@ -676,10 +676,34 @@ Mongo inalcançável o `mongodump` não termina sozinho (nem com SIGTERM), e ant
 sempre. Nesse caso nem o registro `failed` chega ao banco — fica o log, e o check de saúde pega pela
 idade do último backup.
 
-**Fora da máquina** — o dump local não protege contra perder o disco. Escolha um:
-- aponte `BACKUP_HOST_DIR` para um disco externo ou NAS montado; ou
-- `BACKUP_UPLOAD_CMD` com `{}` no lugar do arquivo, ex.: `rclone copy {} remoto:trends-backups`
-  (instale o `rclone` numa imagem própria; a `mongo:7` não o traz).
+**Fora da máquina** — o dump local não protege contra perder o disco. O destino escolhido é o
+**Cloudflare R2** (10 GB grátis, sem custo para baixar na restauração). A imagem do `backup`
+(`infra/backup/Dockerfile`, `mongo:7` + `rclone`) envia cada dump e o `.counts.json` para
+`BACKUP_REMOTE` e apaga do bucket o que passar de `BACKUP_REMOTE_RETENTION_DAYS` (30), sempre
+mantendo os `BACKUP_KEEP_MIN` mais recentes. Falha no envio marca o backup como `failed` (o check
+de saúde alerta); falha só na retenção remota fica no log e tenta de novo no próximo ciclo.
+
+1. No painel da Cloudflare: **R2 → Create bucket** (`trends-backups`), depois **Manage API
+   tokens → Create API token** com permissão *Object Read & Write* restrita a esse bucket.
+2. No `.env` da raiz (nunca no git):
+   ```
+   BACKUP_REMOTE=r2:trends-backups
+   BACKUP_R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+   BACKUP_R2_ACCESS_KEY_ID=...
+   BACKUP_R2_SECRET_ACCESS_KEY=...
+   ```
+3. `docker compose build backup && docker compose up -d backup`, e um ciclo à mão:
+   `docker compose exec backup bash /backup/backup.sh` → `remoto ok: r2:trends-backups/trends-….archive.gz`.
+4. Conferir e baixar: `docker compose exec backup rclone lsl r2:trends-backups` e
+   `docker compose exec backup rclone copy r2:trends-backups/trends-<data>.archive.gz /backups/`
+   (depois, o teste de restauração abaixo).
+
+O dump leva a collection `ml_oauth` (o token do Mercado Livre): deixe o bucket privado e o token
+da API restrito a ele. Restaurar um dump antigo devolve um refresh token já usado — depois de
+restaurar em produção, rode `python -m apps.ml_auth.main` de novo se a coleta do ML der `auth_error`.
+
+Outras saídas: `BACKUP_HOST_DIR` num disco externo ou NAS montado, ou `BACKUP_UPLOAD_CMD` com `{}`
+no lugar do arquivo (qualquer comando; o `rclone` já está na imagem).
 
 **Testar a restauração** (faça isso de vez em quando — backup não testado não é backup). Sobe um
 Mongo descartável, restaura e confere as contagens com o gabarito:

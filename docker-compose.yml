@@ -269,11 +269,14 @@ services:
   # 💾 Backup do Mongo (TIE-35)
   # =========================================
   # mongodump diário para BACKUP_HOST_DIR, com retenção e registro em
-  # `backups` (o check de saúde alerta se falhar). Para tirar da máquina, aponte
-  # BACKUP_HOST_DIR para um disco/NAS montado ou use BACKUP_UPLOAD_CMD.
+  # `backups` (o check de saúde alerta se falhar). Fora da máquina: BACKUP_REMOTE
+  # (rclone; o remoto `r2` vem configurado pelas BACKUP_R2_*), disco/NAS montado
+  # em BACKUP_HOST_DIR ou BACKUP_UPLOAD_CMD.
   # Restauração testada: infra/backup/restore_test.sh (ver README).
   backup:
-    image: mongo:7
+    build:
+      context: ./infra/backup
+    image: bot-trends-backup
     container_name: trends_backup
     restart: unless-stopped
     entrypoint: ["bash", "/backup/backup-loop.sh"]
@@ -288,6 +291,17 @@ services:
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
       BACKUP_KEEP_MIN: ${BACKUP_KEEP_MIN:-3}
       BACKUP_UPLOAD_CMD: ${BACKUP_UPLOAD_CMD:-}
+      # Cópia no Cloudflare R2 (TIE-35): vazio = desligado. O remoto `r2` do
+      # rclone é montado só por variável — sem rclone.conf com segredo em disco.
+      BACKUP_REMOTE: ${BACKUP_REMOTE:-}
+      BACKUP_REMOTE_RETENTION_DAYS: ${BACKUP_REMOTE_RETENTION_DAYS:-30}
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ENDPOINT: ${BACKUP_R2_ENDPOINT:-}
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${BACKUP_R2_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${BACKUP_R2_SECRET_ACCESS_KEY:-}
+      # Token restrito a um bucket não pode criar bucket: não tente
+      RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true"
       # Teto de cada etapa: sem ele, Mongo fora pendurava o mongodump para sempre
       BACKUP_DUMP_TIMEOUT_S: ${BACKUP_DUMP_TIMEOUT_S:-1800}
       BACKUP_UPLOAD_TIMEOUT_S: ${BACKUP_UPLOAD_TIMEOUT_S:-3600}

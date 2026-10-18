@@ -203,6 +203,107 @@ def test_retencao_nao_mexe_em_arquivo_alheio(ambiente):
     assert "anotacoes.txt" in _arquivos(ambiente)
 
 
+# --- remoto do rclone (Cloudflare R2) --------------------------------------------
+# O stub faz o papel do rclone com `remoto:` = uma pasta local, e falha/trava
+# por variável, como os stubs do Mongo.
+
+
+@pytest.fixture
+def remoto(ambiente, tmp_path):
+    pasta = tmp_path / "bucket"
+    pasta.mkdir()
+    _stub(
+        ambiente["bin"],
+        "rclone",
+        f"""
+[ -n "$RCLONE_TRAVA" ] && exec sleep 300
+caminho() {{ echo "{pasta}/${{1#remoto:}}" | sed 's#//*#/#g'; }}
+case "$1" in
+  copyto) [ -n "$RCLONE_FALHA" ] && {{ echo "403 Forbidden: AccessDenied" >&2; exit 1; }}
+          destino=$(caminho "$3"); mkdir -p "$(dirname "$destino")"; cp "$2" "$destino" ;;
+  lsf) [ -n "$RCLONE_LSF_FALHA" ] && {{ echo "lsf falhou" >&2; exit 1; }}
+       ls -1 "$(caminho "$3")" ;;
+  deletefile) rm -f "$(caminho "$2")" ;;
+  *) exit 2 ;;
+esac
+""",
+    )
+    return pasta
+
+
+def _no_bucket(pasta):
+    return sorted(p.name for p in pasta.iterdir())
+
+
+def _antigo_no_bucket(pasta, dias):
+    ts = (dt.datetime.now(dt.UTC) - dt.timedelta(days=dias)).strftime("%Y%m%dT%H%M%SZ")
+    for ext in (".archive.gz", ".counts.json"):
+        (pasta / f"trends-{ts}{ext}").write_text("x")
+    return ts
+
+
+def test_remoto_recebe_o_dump_e_as_contagens(ambiente, remoto):
+    r = _roda(BACKUP, ambiente, BACKUP_REMOTE="remoto:trends-backups/")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    bucket = remoto / "trends-backups"
+    assert _no_bucket(bucket) == _arquivos(ambiente)
+    (archive,) = (n for n in _no_bucket(bucket) if n.endswith(".archive.gz"))
+    assert (bucket / archive).read_text().strip() == "conteudo"
+    assert "remoto ok" in r.stdout
+    assert "status: 'ok'" in ambiente["log"].read_text()
+
+
+def test_sem_remoto_nao_chama_o_rclone(ambiente, remoto):
+    assert _roda(BACKUP, ambiente).returncode == 0
+    assert _no_bucket(remoto) == []
+
+
+def test_envio_que_falha_marca_backup_como_failed(ambiente, remoto):
+    r = _roda(BACKUP, ambiente, BACKUP_REMOTE="remoto:", RCLONE_FALHA="1")
+    assert r.returncode != 0
+    registro = ambiente["log"].read_text()
+    assert "status: 'failed'" in registro and "AccessDenied" in registro
+    # O dump local fica: ele é a cópia que sobrou
+    assert any(n.endswith(".archive.gz") for n in _arquivos(ambiente))
+
+
+def test_envio_travado_estoura_o_timeout(ambiente, remoto):
+    inicio = time.monotonic()
+    r = _roda(
+        BACKUP, ambiente, BACKUP_REMOTE="remoto:", RCLONE_TRAVA="1", BACKUP_UPLOAD_TIMEOUT_S="1"
+    )
+    assert time.monotonic() - inicio < 20
+    assert r.returncode != 0 and "tempo esgotado" in r.stdout
+
+
+def test_retencao_remota_apaga_antigos_e_preserva_o_minimo(ambiente, remoto):
+    velhos = [_antigo_no_bucket(remoto, d) for d in (90, 60, 45)]
+    recente = _antigo_no_bucket(remoto, 2)
+    (remoto / "leia-me.txt").write_text("não é backup")
+
+    r = _roda(BACKUP, ambiente, BACKUP_REMOTE="remoto:", BACKUP_REMOTE_RETENTION_DAYS="30")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    nomes = _no_bucket(remoto)
+    restantes = {n.split(".")[0].removeprefix("trends-") for n in nomes if n.startswith("trends-")}
+    # 3 mais novos ficam: o de agora, o de 2 dias e o de 45 dias (mínimo), apesar dos 30 dias
+    assert recente in restantes and velhos[2] in restantes
+    assert velhos[0] not in restantes and velhos[1] not in restantes
+    assert len(restantes) == 3
+    assert "leia-me.txt" in nomes
+    assert not any(velhos[0] in n for n in nomes)
+
+
+def test_falha_ao_listar_o_remoto_nao_derruba_o_backup(ambiente, remoto):
+    _antigo_no_bucket(remoto, 90)
+    r = _roda(BACKUP, ambiente, BACKUP_REMOTE="remoto:", BACKUP_KEEP_MIN="1", RCLONE_LSF_FALHA="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "retenção remota fica para o próximo ciclo" in r.stdout
+    assert len(_no_bucket(remoto)) == 4  # nada apagado sem listagem
+    assert "status: 'ok'" in ambiente["log"].read_text()
+
+
 # --- restore_test.sh ------------------------------------------------------------
 
 
