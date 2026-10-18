@@ -23,14 +23,23 @@ async function erroHttp(r, path) {
   } catch {
     // corpo não-JSON: fica só o status
   }
+  if (!detalhe && [502, 503, 504].includes(r.status)) {
+    // Sem `detail` quem respondeu foi o nginx, não a API (502 em HTML)
+    return new Error(
+      `HTTP ${r.status} em ${path}: a API não respondeu ao proxy do dashboard. ` +
+        `Confira se ela está no ar (docker compose ps api; docker compose logs api).`
+    );
+  }
   return new Error(`HTTP ${r.status} em ${path}${detalhe ? `: ${detalhe}` : ""}`);
 }
 
-async function httpGet(path) {
+// signal: AbortSignal de quem chama; cancelamento sobe como AbortError
+async function httpGet(path, { signal } = {}) {
   let r;
   try {
-    r = await fetch(`${API_BASE}${path}`);
-  } catch {
+    r = await fetch(`${API_BASE}${path}`, { signal });
+  } catch (e) {
+    if (e?.name === "AbortError") throw e;
     // Mesma origem: aqui só cai falha de rede até o próprio servidor do dashboard
     throw new Error(
       `Não foi possível falar com a API em ${API_BASE}. O dashboard está no ar? ` +
@@ -47,10 +56,10 @@ async function httpGet(path) {
 
 export const api = {
   // cursor: `next_cursor` da página anterior (TIE-32); omitido na primeira página
-  rankingsLatest: ({ hours, limit, source, cursor }) => {
+  rankingsLatest: ({ hours, limit, source, cursor, signal }) => {
     const q = new URLSearchParams({ hours, limit, source });
     if (cursor) q.set("cursor", cursor);
-    return httpGet(`/rankings/latest?${q}`);
+    return httpGet(`/rankings/latest?${q}`, { signal });
   },
 
   productCurve: ({ productId, hours }) =>
