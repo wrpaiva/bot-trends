@@ -515,3 +515,87 @@ def test_categoria_com_erro_do_ml_sobe():
             assert e.response.status_code == 403
         else:
             raise AssertionError("403 deveria subir")
+
+
+# --- onde comprar o produto vinculado ao vídeo (TIE-52) -------------------------
+
+
+def _handler_oferta(
+    produto_status=200, ofertas_status=200, buy_box=None, precos=(30.0, 25.5, 99.0)
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/products/MLB9/items":
+            if ofertas_status != 200:
+                return httpx.Response(ofertas_status, json={"message": "x"})
+            return httpx.Response(200, json=_ofertas(*precos))
+        if path == "/products/MLB9":
+            if produto_status != 200:
+                return httpx.Response(produto_status, json={"message": "x"})
+            return httpx.Response(200, json={**_produto("MLB9"), "buy_box_winner": buy_box})
+        return httpx.Response(404)
+
+    return handler
+
+
+def test_ofertas_traz_nome_link_menor_preco_e_contagem():
+    o = _collector(_handler_oferta()).ofertas("MLB9")
+    assert o == {
+        "catalog_id": "MLB9",
+        "nome": "Produto MLB9",
+        "permalink": "https://www.mercadolivre.com.br/p/MLB9",
+        "busca": "https://lista.mercadolivre.com.br/produto-mlb9",
+        "preco_min": 25.5,
+        "preco_buybox": None,
+        "moeda": "BRL",
+        "n_ofertas": 3,
+    }
+
+
+def test_ofertas_com_buy_box_guarda_os_dois_precos():
+    o = _collector(_handler_oferta(buy_box={"price": 29.9, "currency_id": "BRL"})).ofertas("MLB9")
+    assert (o["preco_buybox"], o["preco_min"]) == (29.9, 25.5)
+
+
+def test_produto_sem_anuncio_ativo_fica_sem_preco_sem_erro():
+    c = _collector(_handler_oferta(ofertas_status=404))
+    o = c.ofertas("MLB9")
+    assert (o["preco_min"], o["n_ofertas"]) == (None, 0)
+    assert c.errors == 0
+
+
+def test_produto_que_saiu_do_catalogo_e_none():
+    assert _collector(_handler_oferta(produto_status=404)).ofertas("MLB9") is None
+
+
+def test_erro_do_ml_nas_ofertas_sobe():
+    c = _collector(_handler_oferta(ofertas_status=403))
+    try:
+        c.ofertas("MLB9")
+    except httpx.HTTPStatusError as e:
+        assert e.response.status_code == 403
+    else:
+        raise AssertionError("403 tinha que subir")
+
+
+def test_produto_fora_do_catalogo_vem_sem_permalink_e_com_busca():
+    # 7 de 7 vinculados em 2026-10-18: permalink "" e ofertas 404 "No winners found"
+    def handler(request):
+        if request.url.path == "/products/MLB9":
+            return httpx.Response(
+                200, json={**_produto("MLB9"), "name": "Tábua Mágica 3L", "permalink": ""}
+            )
+        return httpx.Response(404, json={"message": "No winners found", "error": "not_found"})
+
+    o = _collector(handler).ofertas("MLB9")
+    assert o["permalink"] is None
+    assert o["busca"] == "https://lista.mercadolivre.com.br/tabua-magica-3l"
+    assert (o["preco_min"], o["n_ofertas"]) == (None, 0)
+
+
+def test_link_de_busca_normaliza_o_texto():
+    assert ml_mod.link_de_busca("Cinta Modeladora — Zíper/Colchete, P") == (
+        "https://lista.mercadolivre.com.br/cinta-modeladora-ziper-colchete-p"
+    )
+    assert ml_mod.link_de_busca("") is None
+    assert ml_mod.link_de_busca("!!!") is None

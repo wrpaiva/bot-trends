@@ -1,6 +1,6 @@
 // src/ranking.test.js — lógica da tela de ranking (TIE-28)
 import { describe, expect, it } from "vitest";
-import { sortItems, viewState, ultimaRequisicao, RISK_ORDER, CLASS_ORDER } from "./ranking.js";
+import { sortItems, viewState, ultimaRequisicao, ofertaML, RISK_ORDER, CLASS_ORDER } from "./ranking.js";
 
 const itens = [
   { product_id: "a", title: "Beta", final_score: 50, trend_classification: "SUBINDO", risk_level: "ALTO" },
@@ -91,5 +91,45 @@ describe("ultimaRequisicao", () => {
     seq.cancela();
     expect(req.valida()).toBe(false);
     expect(req.signal.aborted).toBe(true);
+  });
+});
+
+describe("ofertaML (TIE-52)", () => {
+  const base = {
+    nome: "Kit Brocas 9 Peças",
+    link: "https://www.mercadolivre.com.br/p/MLB77",
+    link_tipo: "produto",
+    preco: 1299.9,
+    n_ofertas: 4,
+    disponivel: true,
+  };
+
+  it("resume preço em reais e nº de ofertas", () => {
+    const o = ofertaML({ ml_offer: base });
+    expect(o.nome).toBe("Kit Brocas 9 Peças");
+    expect(o.link).toBe(base.link);
+    expect(o.resumo.replace(/\s/g, " ")).toBe("R$ 1.299,90 · 4 ofertas");
+  });
+
+  it("singular com uma oferta e aviso sem anúncio", () => {
+    expect(ofertaML({ ml_offer: { ...base, preco: null, n_ofertas: 1 } }).resumo).toBe("1 oferta");
+    expect(ofertaML({ ml_offer: { ...base, preco: null, n_ofertas: 0 } }).resumo).toBe(
+      "sem anúncio ativo",
+    );
+  });
+
+  it("fora do catálogo vira busca no ML, sem preço", () => {
+    const o = ofertaML({
+      ml_offer: { ...base, link_tipo: "busca", link: "https://lista.mercadolivre.com.br/kit", preco: null, n_ofertas: 0 },
+    });
+    expect(o.nome).toBe("buscar Kit Brocas 9 Peças");
+    expect(o.resumo).toBe("ver anúncios");
+  });
+
+  it("nada sem vínculo, sem link ou fora do catálogo", () => {
+    expect(ofertaML({})).toBeNull();
+    expect(ofertaML({ ml_offer: null })).toBeNull();
+    expect(ofertaML({ ml_offer: { ...base, link: null } })).toBeNull();
+    expect(ofertaML({ ml_offer: { ...base, disponivel: false } })).toBeNull();
   });
 });

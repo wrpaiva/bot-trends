@@ -18,6 +18,7 @@ from src.infrastructure.collectors.mercado_livre import MercadoLivreCollector
 from src.infrastructure.collectors.ml_auth import MercadoLivreAuth, MLAuthError
 from src.infrastructure.config import settings
 from src.infrastructure.db.mongo import get_db
+from src.infrastructure.db.repos import onde_comprar
 from src.infrastructure.observability import http_metrics, render, system_samples
 from src.infrastructure.security.rate_limit import limiter
 from src.infrastructure.utils.datetime_utils import ensure_utc, utcnow
@@ -165,6 +166,7 @@ def rankings_latest(
     }
 
     nomes = _nomes_de_categoria(db, [p.get("category") for p in products.values()])
+    compra = onde_comprar(db, products)
 
     result = []
     for i in insights:
@@ -183,6 +185,8 @@ def rankings_latest(
                 "sources": i.get("sources", []),
                 "window_hours": i.get("window_hours"),
                 "ts": i.get("ts"),
+                # Vídeo vinculado: onde comprar no ML (TIE-52); None sem vínculo
+                "ml_offer": compra.get(i["product_id"]),
             }
         )
 

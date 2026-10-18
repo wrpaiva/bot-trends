@@ -691,3 +691,67 @@ def test_dedupe_desligado_pela_config_grava_sempre(db, monkeypatch):
     mod.hybrid_trend_analyze()
     mod.hybrid_trend_analyze()
     assert db["trend_insights"].count_documents({}) == 4
+
+
+# --- onde comprar no alerta (TIE-52) --------------------------------------------
+
+
+def test_alerta_de_video_vinculado_diz_onde_comprar_no_ml(db):
+    db["products"].update_one(
+        {"product_id": "p1"},
+        {"$set": {"ml_match": {"status": "vinculado", "ml_product_id": "ml1"}}},
+    )
+    db["products"].insert_one(
+        {
+            "product_id": "ml1",
+            "source": "mercadolivre",
+            "ml_offers": {
+                "nome": "Kit Brocas 9 Peças",
+                "permalink": "https://www.mercadolivre.com.br/p/MLB77",
+                "preco_min": 25.5,
+                "preco_buybox": 1299.9,
+                "moeda": "BRL",
+                "n_ofertas": 4,
+                "disponivel": True,
+            },
+        }
+    )
+    mod.hybrid_trend_analyze()
+
+    (msg,) = (m for m in _Telegram.enviados if "Produto p1" in m)
+    assert "🛒 No Mercado Livre" in msg
+    assert '<a href="https://www.mercadolivre.com.br/p/MLB77">Kit Brocas 9 Peças</a>' in msg
+    assert "R$ 1.299,90" in msg and "4 ofertas" in msg
+    (outro,) = (m for m in _Telegram.enviados if "Produto p2" in m)
+    assert "Mercado Livre" not in outro
+
+
+def test_alerta_escapa_o_html_do_titulo(db):
+    # parse_mode=HTML: "<" ou "&" no título faziam o Telegram recusar a mensagem
+    db["products"].update_one({"product_id": "p1"}, {"$set": {"title": "Kit <3 & cia"}})
+    mod.hybrid_trend_analyze()
+    assert any("Kit &lt;3 &amp; cia" in m for m in _Telegram.enviados)
+
+
+def test_alerta_sem_pagina_de_produto_aponta_para_a_busca(db):
+    db["products"].update_one(
+        {"product_id": "p1"},
+        {"$set": {"ml_match": {"status": "vinculado", "ml_product_id": "ml1"}}},
+    )
+    db["products"].insert_one(
+        {
+            "product_id": "ml1",
+            "source": "mercadolivre",
+            "ml_offers": {
+                "nome": "Tábua Mágica",
+                "permalink": None,
+                "busca": "https://lista.mercadolivre.com.br/tabua-magica",
+                "n_ofertas": 0,
+                "disponivel": True,
+            },
+        }
+    )
+    mod.hybrid_trend_analyze()
+    msg = next(m for m in _Telegram.enviados if "Produto p1" in m)
+    assert '<a href="https://lista.mercadolivre.com.br/tabua-magica">buscar Tábua Mágica</a>' in msg
+    assert "R$" not in msg.split("Mercado Livre")[1]

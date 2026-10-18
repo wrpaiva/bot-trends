@@ -43,6 +43,8 @@ celery_app.conf.task_routes = {
     "tasks.collect_tiktok": {"queue": "tiktok"},
     # Chama o ML: divide a fila (e o ritmo) com a coleta do ML (TIE-18)
     "tasks.link_tiktok_ml": {"queue": "ml"},
+    # Onde comprar o produto vinculado (TIE-52): também chama o ML
+    "tasks.refresh_ml_offers": {"queue": "ml"},
     "tasks.hybrid_trend_analyze": {"queue": "trend"},
     # Fila padrão: se "trend" encher, o check de fila ainda consegue rodar (TIE-39)
     "tasks.system_health_check": {"queue": "celery"},
@@ -63,6 +65,11 @@ celery_app.conf.beat_schedule = {
     "link-tiktok-ml": {
         "task": "tasks.link_tiktok_ml",
         "schedule": 60 * settings.TIKTOK_INTERVAL_MIN,
+    },
+    # Preço e ofertas do produto vinculado mudam no ritmo da coleta do ML (TIE-52)
+    "refresh-ml-offers-every-6h": {
+        "task": "tasks.refresh_ml_offers",
+        "schedule": 60 * 60 * 6,
     },
     "trend-analysis-every-30m": {
         "task": "tasks.hybrid_trend_analyze",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import unicodedata
 from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlencode
@@ -17,6 +19,18 @@ from src.infrastructure.config import settings
 from src.infrastructure.logging_setup import http_log_hooks
 
 logger = logging.getLogger(__name__)
+
+
+BUSCA_ML = "https://lista.mercadolivre.com.br/"
+
+
+def link_de_busca(texto: str | None) -> str | None:
+    """Página de busca do ML para um texto: "Tábua Mágica 3L" → .../tabua-magica-3l."""
+    if not texto:
+        return None
+    ascii_ = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_.lower()).strip("-")
+    return BUSCA_ML + slug if slug else None
 
 
 class MercadoLivreCollector:
@@ -355,6 +369,42 @@ class MercadoLivreCollector:
             raise
         path = [p["name"] for p in data.get("path_from_root") or [] if p.get("name")]
         return {"ml_category_id": data.get("id") or category_id, "name": data["name"], "path": path}
+
+    def ofertas(self, catalog_id: str) -> dict[str, Any] | None:
+        """
+        Onde comprar um produto do catálogo (TIE-52): nome, link, menor preço,
+        preço do buy box e nº de anúncios ativos. None se o produto saiu do
+        catálogo (404); sem anúncio ativo, preço None e 0 ofertas. Outras
+        falhas sobem: quem chama conta o erro.
+
+        A menor oferta pode ser anúncio fora da curva (armadilha 1): por isso
+        o buy box vai junto, e quem mostra escolhe.
+
+        Produto vendido só em anúncio comum (fora do catálogo) vem com
+        `permalink` vazio e ofertas 404 "No winners found" — 7 de 7 vinculados
+        em 2026-10-18. Para esses, `busca` é a página de busca do ML pelo nome
+        (mesmo formato de URL que o `/trends` devolve).
+        """
+        try:
+            produto = self._get_product(catalog_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+        anuncios = self._get_offers(catalog_id)
+        com_preco = [o for o in anuncios if o.get("price") is not None]
+        mais_barata = min(com_preco, key=lambda o: o["price"]) if com_preco else {}
+        buy_box = produto.get("buy_box_winner") or {}
+        return {
+            "catalog_id": catalog_id,
+            "nome": produto.get("name"),
+            "permalink": produto.get("permalink") or None,
+            "busca": link_de_busca(produto.get("name")),
+            "preco_min": mais_barata.get("price"),
+            "preco_buybox": buy_box.get("price"),
+            "moeda": buy_box.get("currency_id") or mais_barata.get("currency_id"),
+            "n_ofertas": len(anuncios),
+        }
 
     def _sem_token(self, e: MLAuthError) -> None:
         self.errors += 1

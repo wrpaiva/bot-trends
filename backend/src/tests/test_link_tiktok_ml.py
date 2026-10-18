@@ -34,6 +34,9 @@ class _Catalogo:
     resultados: dict[str, list[Candidato] | None] = {}
     dominios: dict[str, str | None] = {}
     falha_dominio = False
+    # Onde comprar (TIE-52): catalog_id → oferta, None (saiu do catálogo) ou exceção
+    ofertas_por_id: dict[str, object] = {}
+    pedidas: list[str] = []
 
     def __init__(self, **kwargs):
         self.errors = 0
@@ -50,11 +53,30 @@ class _Catalogo:
             self.errors += 1
         return r
 
+    def ofertas(self, catalog_id):
+        _Catalogo.pedidas.append(catalog_id)
+        r = _Catalogo.ofertas_por_id.get(catalog_id, _oferta(catalog_id))
+        if isinstance(r, Exception):
+            raise r
+        return r
+
     def dominio_sugerido(self, consulta):
         if _Catalogo.falha_dominio:
             self.errors += 1
             return None
         return _Catalogo.dominios.get(consulta)
+
+
+def _oferta(catalog_id, preco=49.9, n=3):
+    return {
+        "catalog_id": catalog_id,
+        "nome": f"Produto {catalog_id}",
+        "permalink": f"https://www.mercadolivre.com.br/p/{catalog_id}",
+        "preco_min": preco,
+        "preco_buybox": None,
+        "moeda": "BRL",
+        "n_ofertas": n,
+    }
 
 
 class _Breaker:
@@ -91,6 +113,8 @@ def db(monkeypatch):
     }
     _Catalogo.dominios = {"kit brocas corte lateral": "MLB-DRILL"}
     _Catalogo.falha_dominio = False
+    _Catalogo.ofertas_por_id = {}
+    _Catalogo.pedidas = []
     monkeypatch.setattr(mod.settings, "ML_CLIENT_ID", "123")
     monkeypatch.setattr(mod.settings, "ML_CLIENT_SECRET", "segredo")
     monkeypatch.setattr(mod.settings, "TIKTOK_ML_MATCH_MIN_SCORE", 0.8)
@@ -308,3 +332,94 @@ def test_sem_video_pendente_nao_constroi_nada(db, monkeypatch):
         "no_product": 0,
         "no_candidate": 0,
     }
+
+
+# --- onde comprar o produto vinculado (TIE-52) ----------------------------------
+
+
+def _ml(db, pid, catalog_id, videos=("v1",)):
+    db["products"].insert_one(
+        {
+            "product_id": pid,
+            "source": "mercadolivre",
+            "source_product_id": catalog_id,
+            "title": f"Produto {catalog_id}",
+            "linked_videos": list(videos),
+        }
+    )
+
+
+def test_vinculo_novo_ja_grava_onde_comprar(db):
+    _video(db, "v1", BROCAS)
+    mod.link_tiktok_ml()
+
+    ml_pid = _match(db, "v1")["ml_product_id"]
+    ofertas = db["products"].find_one({"product_id": ml_pid})["ml_offers"]
+    assert ofertas["disponivel"] is True
+    assert (ofertas["preco_min"], ofertas["n_ofertas"]) == (49.9, 3)
+    assert ofertas["permalink"].endswith("/MLB77")
+    # Não vira leitura: o produto não entra no ranking nem no percentil do ML
+    assert db["metrics"].count_documents({}) == 0
+
+
+def test_falha_nas_ofertas_nao_desfaz_o_vinculo(db):
+    _video(db, "v1", BROCAS)
+    _Catalogo.ofertas_por_id = {"MLB77": RuntimeError("500")}
+    r = mod.link_tiktok_ml()
+
+    assert r["linked"] == 1 and r["errors"] == 0
+    assert _match(db, "v1")["status"] == "vinculado"
+    ml_pid = _match(db, "v1")["ml_product_id"]
+    assert "ml_offers" not in db["products"].find_one({"product_id": ml_pid})
+
+
+def test_renovacao_atualiza_so_produto_com_video_vinculado(db):
+    _ml(db, "p1", "MLB1")
+    _ml(db, "p2", "MLB2", videos=())
+    _Catalogo.ofertas_por_id = {"MLB1": _oferta("MLB1", preco=10.0)}
+
+    r = mod.refresh_ml_offers()
+
+    assert r["status"] == "ok" and r["inserted"] == 1
+    assert _Catalogo.pedidas == ["MLB1"]
+    assert db["products"].find_one({"product_id": "p1"})["ml_offers"]["preco_min"] == 10.0
+    assert "ml_offers" not in db["products"].find_one({"product_id": "p2"})
+
+
+def test_produto_que_saiu_do_catalogo_fica_indisponivel(db):
+    _ml(db, "p1", "MLB1")
+    _Catalogo.ofertas_por_id = {"MLB1": None}
+    mod.refresh_ml_offers()
+    ofertas = db["products"].find_one({"product_id": "p1"})["ml_offers"]
+    assert ofertas["disponivel"] is False and ofertas["catalog_id"] == "MLB1"
+
+
+def test_renovacao_com_falha_em_um_produto_segue_com_os_outros(db):
+    _ml(db, "p1", "MLB1")
+    _ml(db, "p2", "MLB2")
+    _Catalogo.ofertas_por_id = {"MLB1": RuntimeError("500")}
+    r = mod.refresh_ml_offers()
+    assert (r["status"], r["inserted"], r["errors"]) == ("partial", 1, 1)
+    assert "ml_offers" in db["products"].find_one({"product_id": "p2"})
+
+
+def test_renovacao_sem_token_para_com_motivo(db):
+    _ml(db, "p1", "MLB1")
+    _Catalogo.ofertas_por_id = {"MLB1": mod.MLAuthError("nenhum token gravado")}
+    r = mod.refresh_ml_offers()
+    assert r["status"] == "error" and "nenhum token" in r["reason"]
+
+
+def test_renovacao_sem_vinculo_nao_chama_o_ml(db, monkeypatch):
+    def falha(*_, **__):
+        raise AssertionError("não devia construir o cliente")
+
+    monkeypatch.setattr(mod, "MercadoLivreCollector", falha)
+    assert mod.refresh_ml_offers()["inserted"] == 0
+
+
+def test_renovacao_com_circuito_aberto_nem_comeca(db, monkeypatch):
+    _ml(db, "p1", "MLB1")
+    monkeypatch.setattr(mod, "_breaker", lambda nome: _Breaker(aberto=True))
+    assert mod.refresh_ml_offers()["status"] == "circuit_open"
+    assert _Catalogo.pedidas == []
