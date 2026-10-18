@@ -545,9 +545,15 @@ No corte anterior, o score punha esses produtos no percentil 0,26–0,31 e a pos
    validar um preditor com esta coleta.
 
 Esperar mais dias não muda isso: a diferença já é estável e o evento que importa é raro. O que muda
-a resposta é **um sinal que a posição não tem**: a demanda de `/trends/MLB/{categoria}` (termos mais
-buscados, TIE-51), o vídeo do TikTok ligado ao produto (TIE-18, parte 2) ou uma coleta mais larga
-que o top 20. Sem isso, mexer nos pesos do ML só reordena o mesmo ruído.
+a resposta é **um sinal que a posição não tem**, e hoje só resta um: o vídeo do TikTok ligado ao
+produto (TIE-18, parte 2, que depende da coleta do TikTok voltar). Os outros dois candidatos foram
+medidos em 2026-10-18 e não servem:
+- **coleta além do top 20**: o `/highlights` devolve exatamente 20 itens por categoria;
+- **termos mais buscados** (`/trends/MLB/{categoria}`, 50 termos em ordem, sem volume): só 6 dos 85
+  produtos do ranking têm no título um termo em alta da própria categoria, e 4 desses casam com o
+  mesmo termo genérico. Os termos falam de outra coisa (lojas, datas, cartão-presente).
+
+Sem sinal novo, mexer nos pesos do ML só reordena o mesmo ruído.
 
 ---
 
