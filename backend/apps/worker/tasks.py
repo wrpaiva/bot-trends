@@ -148,6 +148,17 @@ def collect_tiktok():
     products = ProductRepo(db)
     metrics = MetricsRepo(db)
 
+    # Sem token é config, não falha do serviço (como no ML): devolve o motivo,
+    # sem traceback a cada ciclo do beat e sem mexer no circuito (TIE-33)
+    if not settings.APIFY_TOKEN:
+        logger.warning("Coleta do TikTok desligada: APIFY_TOKEN vazio no backend/.env")
+        return {
+            "status": "error",
+            "inserted": 0,
+            "errors": 1,
+            "reason": "falta APIFY_TOKEN no backend/.env",
+        }
+
     hashtags = [h.strip() for h in settings.TIKTOK_HASHTAGS.split(",") if h.strip()]
     per_hashtag = settings.TIKTOK_RESULTS_PER_HASHTAG
     breaker = _breaker("apify")

@@ -35,6 +35,7 @@ def test_collect_tiktok_respeita_limite_por_hashtag(monkeypatch):
     monkeypatch.setattr(tasks_mod, "_breaker", lambda nome: None)
     monkeypatch.setattr(tasks_mod.settings, "TIKTOK_HASHTAGS", "achadinhos, ,#tiktokmademebuyit")
     monkeypatch.setattr(tasks_mod.settings, "TIKTOK_RESULTS_PER_HASHTAG", 7)
+    monkeypatch.setattr(tasks_mod.settings, "APIFY_TOKEN", "token-de-teste")
 
     assert tasks_mod.collect_tiktok() == {"status": "ok", "inserted": 0, "errors": 0}
 
@@ -51,3 +52,20 @@ def test_beat_do_tiktok_usa_intervalo_da_config():
     ]
     assert len(entradas) == 1
     assert entradas[0]["schedule"] == 60 * tasks_mod.settings.TIKTOK_INTERVAL_MIN
+
+
+def test_sem_apify_token_devolve_o_motivo_sem_chamar_a_apify(monkeypatch):
+    # Instalação nova (TIE-33): token vazio no .env não pode virar traceback a
+    # cada ciclo nem abrir o circuito da Apify
+    _FakeCollector.chamadas = []
+    monkeypatch.setattr(tasks_mod, "TikTokApifyCollector", _FakeCollector)
+    monkeypatch.setattr(tasks_mod, "get_db", lambda: mongomock.MongoClient().db)
+    monkeypatch.setattr(
+        tasks_mod, "_breaker", lambda nome: (_ for _ in ()).throw(AssertionError("breaker"))
+    )
+    monkeypatch.setattr(tasks_mod.settings, "APIFY_TOKEN", "")
+
+    res = tasks_mod.collect_tiktok()
+
+    assert res["status"] == "error" and "APIFY_TOKEN" in res["reason"]
+    assert _FakeCollector.chamadas == []

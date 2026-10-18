@@ -108,6 +108,11 @@ Ubuntu 24.04), o `up -d --build` constrói a imagem nova e **deixa o container a
 (visto em 2026-10-08). Na dúvida, compare `docker inspect -f '{{.Image}}' trends_api` com
 `docker image inspect -f '{{.Id}}' bot-trends-api`.
 
+A pasta `backups/` já vem no clone, com o seu usuário como dono. O serviço `backup` grava nela
+como o uid `BACKUP_UID` (default 1000): se `id -u` não der 1000, ponha o seu em `BACKUP_UID` e
+`BACKUP_GID` no `.env` da raiz. Apagou a pasta ou mudou `BACKUP_HOST_DIR`? Crie-a **antes** do
+`up` — criada pelo Docker ela nasce `root`, e todo backup falha com `permission denied`.
+
 Portas ocupadas por outro projeto? Troque `API_HOST_PORT`, `WEB_HOST_PORT`, `MONGO_HOST_PORT`,
 `REDIS_HOST_PORT` e `WEB_DEV_HOST_PORT` no `.env` da raiz. Mongo e Redis só escutam em `127.0.0.1`.
 
@@ -116,8 +121,13 @@ Portas ocupadas por outro projeto? Troque `API_HOST_PORT`, `WEB_HOST_PORT`, `MON
 ```bash
 docker compose run --rm api python -m apps.migrate.main      # índices e collections
 docker compose run --rm api python -m apps.bootstrap.main    # categorias padrão
-# Uma vez, se já havia vídeos coletados: data de publicação a partir dos datasets
-# antigos da Apify (só leitura, não gasta crédito). Sem ela, eles ficam no cálculo antigo.
+```
+
+Instalação nova termina aqui. **Só se você já tinha vídeos coletados** antes da data de
+publicação existir (instalação antiga, com `APIFY_TOKEN`), preencha essa data a partir dos
+datasets da Apify (só leitura, não gasta crédito) — sem ela esses vídeos ficam no cálculo antigo:
+
+```bash
 docker compose run --rm api python -m apps.backfill.tiktok_published --dry-run
 docker compose run --rm api python -m apps.backfill.tiktok_published
 ```
@@ -200,15 +210,19 @@ docker compose exec worker python -c "from apps.worker.main import celery_app as
 curl -H "X-API-Key: $API_KEY" "http://localhost:8000/rankings/latest?limit=5"   # count > 0
 ```
 
-E então o dashboard (`http://localhost`, porta `WEB_HOST_PORT`) mostra o ranking. Validado de ponta
+E então o dashboard (`http://localhost`, porta `WEB_HOST_PORT`) mostra o ranking. **Sem a
+autorização do ML** a coleta devolve `{'status': 'error', ..., 'reason': 'faltam ML_CLIENT_ID,
+ML_CLIENT_SECRET no backend/.env'}`, a análise `processed: 0` e o ranking fica vazio: é aqui que
+a instalação nova para até o OAuth do passo 3 (conferido num Docker limpo em 2026-10-18, TIE-33). Validado de ponta
 a ponta em 2026-10-08 (TIE-5): `MLB1051` + `MLB1000` habilitadas → 34 leituras, 0 erros → 33
 produtos analisados → 33 no ranking e na tela. O que esperar hoje:
 
 - **Só produtos do ML.** A coleta do TikTok depende de crédito na Apify; sem ele, o breaker
   `apify` aparece aberto no `/health/ready`, e vídeos com métricas de mais de 72 h saem da janela.
-- **Quase tudo `ESTAVEL`, score final entre 38 e 54, nenhum alerta** (limiar 60; medido com o
-  prompt v5 em 2026-10-08). Item do ML ainda não tem vendas nem avaliações (o ML as nega a token
-  comum), e o `rank_momentum` só pontua quando o produto sobe no ranking.
+- **Score do ML entre ~5 e ~75, poucos alertas** (limiar 62 no ML, 85 no TikTok — ver
+  "Alertas"). O score do ML sai da posição no ranking e da subida nele (+ preço): o ML não dá
+  vendas, avaliações nem visitas a token comum (TIE-51), e o `rank_momentum` só pontua quando o
+  produto sobe no ranking.
 - A análise do beat pode coincidir com a manual: o ranking mostra só o insight mais recente de
   cada produto, então não duplica.
 
