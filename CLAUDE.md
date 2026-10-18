@@ -191,7 +191,13 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    token de usuário comum. **`/products/search?site_id=MLB&q=` e `/sites/MLB/domain_discovery/search`
    respondem 200** (2026-10-16) — a busca no catálogo funciona, só a de anúncios não. Funcionam `/products/{id}` (nome, atributos; `buy_box_winner` veio
    `null`) e `/products/{id}/items` (ofertas: preço, vendedor — sem `sold_quantity`); nenhuma
-   rota de reviews responde (`/reviews/item` 403 no item, 404 no produto). **Por isso o
+   rota de reviews responde (`/reviews/item` 403 no item, 404 no produto). **Não há fonte de
+   avaliações nem de visitas pela API** (TIE-51, 2026-10-18): `/reviews/item` com
+   `catalog_product_id` 403, `/reviews/product`, `/reviews/catalog_product` e `/items/{id}/reviews`
+   404, `/products/{id}/reviews` 500, `/items/{id}/visits` e `/items/visits` 403 (visita é só do
+   próprio anúncio); nenhum campo de nota em `/products/{id}` nem nas ofertas. Respondem 200:
+   `/users/{seller_id}` (reputação do vendedor) e `/trends/MLB[/{categoria}]` (termos mais
+   buscados — sinal de demanda ainda não usado). Não tente de novo sem mudar o app/escopo. **Por isso o
    collector parte do catálogo:** `source_product_id` é o id do **produto** (não do anúncio),
    preço = buy box ou menor oferta, `category` = categoria do ranking, `USER_PRODUCT` fica de
    fora sem contar erro. Validado em 2026-10-06 com `MLB1051`: 18 produtos, 0 erros (2 `USER_PRODUCT` de fora). A menor oferta pode ser anúncio fora da curva (fone a R$ 10). O refresh token é de **uso único**: nunca renove
@@ -200,7 +206,7 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
 2. **`rank_momentum` e `reviews_velocity` só existem para item do ML** (TIE-16). A coleta grava
    `rank_position` (`/highlights`); `reviews_total` e `sold_quantity` saem **None** desde
    2026-10-06, porque `/reviews/item` e `/items` dão 403 a token comum (armadilha 1) — o
-   `reviews_velocity` do ML fica em 0 com `score.sem_historico` até achar outra fonte. As regras
+   `reviews_velocity` do ML fica em 0 com `score.sem_historico` — sem fonte pela API (TIE-51). As regras
    ficam em `src/domain/rank_momentum.py` e `reviews_velocity.py`. Desde a TIE-48 vídeo do
    TikTok não pontua essas dimensões (saem do cálculo), e o `reviews_velocity` do ML, zero em
    todos, cai como "não medido": o score do ML sai de posição + subida no ranking (+ preço).
