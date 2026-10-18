@@ -95,9 +95,9 @@ export default function RankingTable({ items, loading, error, sort, onSort, onSe
 
       {estado === "empty" && (
         <Aviso>
-          Nenhum produto analisado neste período, fonte e categoria. Aumente o período, troque a fonte
-          ou a categoria, ou
-          confira se a coleta e a análise estão rodando (<code>docker compose logs worker</code>).
+          Nenhum produto analisado com estes filtros. Aumente o período, troque a fonte ou a
+          categoria, desmarque "Só com onde comprar" (vale só para vídeo do TikTok), ou confira se a
+          coleta e a análise estão rodando (<code>docker compose logs worker</code>).
         </Aviso>
       )}
 

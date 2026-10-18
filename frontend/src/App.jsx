@@ -12,6 +12,7 @@ export default function App() {
   const [source, setSource] = useState("all"); // all|mercadolivre|tiktok
   const [limit, setLimit] = useState(20);
   const [category, setCategory] = useState(""); // "" = todas (TIE-45)
+  const [withOffer, setWithOffer] = useState(false); // só com onde comprar (TIE-53)
   const [aba, setAba] = useState("ranking"); // ranking|categorias
 
   // Categorias: alimentam o filtro e a aba de categorias
@@ -82,7 +83,10 @@ export default function App() {
     setSort((s) => (s.key === key ? { key, dir: s.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
   }
 
-  const params = useMemo(() => ({ hours, limit, source, category }), [hours, limit, source, category]);
+  const params = useMemo(
+    () => ({ hours, limit, source, category, withOffer }),
+    [hours, limit, source, category, withOffer]
+  );
 
   // Só a requisição mais nova grava na tela (ver ultimaRequisicao)
   const requisicoes = useRef(null);
@@ -115,7 +119,7 @@ export default function App() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hours, limit, source, category]);
+  }, [hours, limit, source, category, withOffer]);
 
   useEffect(
     () => () => {
@@ -213,6 +217,8 @@ export default function App() {
           category={category}
           setCategory={setCategory}
           categorias={categorias}
+          withOffer={withOffer}
+          setWithOffer={setWithOffer}
         />
       </section>
 

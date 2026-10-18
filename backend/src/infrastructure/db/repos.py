@@ -163,3 +163,19 @@ def onde_comprar(db: Database, produtos: dict[str, dict]) -> dict[str, dict]:
             "atualizado_em": o.get("ts"),
         }
     return saida
+
+
+def videos_com_oferta(db: Database) -> list[str]:
+    """
+    product_id dos vídeos que `onde_comprar` mostraria (TIE-53): mesma regra,
+    para o filtro do ranking e a linha 🛒 nunca discordarem.
+    """
+    vinculados = {
+        p["product_id"]: p
+        for p in db["products"].find(
+            {"source": "tiktok", "ml_match.status": "vinculado"},
+            {"_id": 0, "product_id": 1, "ml_match": 1},
+        )
+    }
+    # Fora do catálogo (`disponivel` falso) a tela não mostra a linha 🛒
+    return sorted(pid for pid, o in onde_comprar(db, vinculados).items() if o["disponivel"])

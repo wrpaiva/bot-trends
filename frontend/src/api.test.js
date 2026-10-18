@@ -33,6 +33,15 @@ describe("httpGet", () => {
     expect(headers.has("X-API-Key")).toBe(false);
   });
 
+  it("filtro de onde comprar só vai quando ligado (TIE-53)", async () => {
+    stubFetch(() => Promise.resolve(new Response("{}", { status: 200 })));
+    await api.rankingsLatest({ hours: 72, limit: 20, source: "all", withOffer: true });
+    await api.rankingsLatest({ hours: 72, limit: 20, source: "all", withOffer: false });
+    const [ligado, desligado] = fetch.mock.calls.map(([url]) => new URL(url, "http://x").searchParams);
+    expect(ligado.get("with_offer")).toBe("true");
+    expect(desligado.has("with_offer")).toBe(false);
+  });
+
   it("429 pede para esperar", async () => {
     stubFetch(() => Promise.resolve(new Response("", { status: 429 })));
     await expect(api.rankingsLatest({ hours: 72, limit: 20, source: "all" })).rejects.toThrow(/Muitas requisições/);

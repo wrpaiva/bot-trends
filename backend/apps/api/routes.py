@@ -18,7 +18,7 @@ from src.infrastructure.collectors.mercado_livre import MercadoLivreCollector
 from src.infrastructure.collectors.ml_auth import MercadoLivreAuth, MLAuthError
 from src.infrastructure.config import settings
 from src.infrastructure.db.mongo import get_db
-from src.infrastructure.db.repos import onde_comprar
+from src.infrastructure.db.repos import onde_comprar, videos_com_oferta
 from src.infrastructure.observability import http_metrics, render, system_samples
 from src.infrastructure.security.rate_limit import limiter
 from src.infrastructure.utils.datetime_utils import ensure_utc, utcnow
@@ -105,6 +105,7 @@ def rankings_latest(
     hours: int = Query(72, ge=1, le=720),
     window_hours: int | None = Query(None, ge=1, le=720),
     category: str | None = Query(None, pattern=r"^[A-Z]{3}\d{1,12}$"),
+    with_offer: bool = Query(False),
     cursor: str | None = Query(None, max_length=500),
 ):
     """
@@ -132,6 +133,14 @@ def rankings_latest(
         # não tem categoria: filtrar por uma tira o TikTok do ranking.
         ids = db["products"].distinct("product_id", {"category": category})
         match["product_id"] = {"$in": ids}
+    if with_offer:
+        # Só vídeo com onde comprar no ML (TIE-53). Antes do $group: o cursor
+        # pagina dentro do filtro. Com categoria junto, fica a interseção
+        # (vazia hoje: vídeo não tem categoria).
+        com_oferta = videos_com_oferta(db)
+        if "product_id" in match:
+            com_oferta = sorted(set(com_oferta) & set(match["product_id"]["$in"]))
+        match["product_id"] = {"$in": com_oferta}
 
     pipeline = [
         {"$match": match},
