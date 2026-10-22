@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 # Id numérico do vídeo dentro da URL: .../@autor/video/7075778590062988546
 _VIDEO_ID_NA_URL = re.compile(r"/video/(\d+)")
 
+# Lote a partir deste tamanho com todas as métricas zeradas = formato do actor
+# que o `_normalize_item` não conhece (TIE-55). Abaixo disso, pode ser só vídeo
+# recém-publicado.
+MIN_LOTE_SEM_METRICAS = 3
+
+
+def _sem_metricas(item: dict[str, Any]) -> bool:
+    social = item["social"]
+    return not any(social[k] for k in ("views", "likes", "comments", "shares"))
+
 
 def parse_published_at(item: dict[str, Any]) -> dt.datetime | None:
     """Data de publicação do vídeo, aware em UTC (createTimeISO ou epoch)."""
@@ -50,6 +60,7 @@ class TikTokApifyCollector:
       - Retry só em erro transitório (429/5xx/timeout), respeitando Retry-After
       - Teto de requisições por minuto (APIFY_MAX_REQUESTS_PER_MINUTE)
       - `errors` conta as etapas que falharam de vez (TIE-17)
+      - Lote inteiro sem métricas é descartado, com o motivo em `reason` (TIE-55)
       - Context manager para gerenciamento de recursos
       - Logging estruturado de erros
       - Polling com timeout para aguardar execução do actor
@@ -81,6 +92,7 @@ class TikTokApifyCollector:
             max_requests_per_minute = settings.APIFY_MAX_REQUESTS_PER_MINUTE
         self._limiter = RateLimiter(max_requests_per_minute)
         self.errors = 0
+        self.reason: str | None = None
         self._timeout_s = timeout_s
         self._transport = transport  # injetável nos testes
         self._client: httpx.Client | None = None
@@ -266,11 +278,27 @@ class TikTokApifyCollector:
             self.errors += 1
             return
 
+        lote = []
         for item in items:
             normalizado = self._normalize_item(item)
             if normalizado is None:
                 logger.warning("Item do TikTok sem id de vídeo, ignorado")
                 continue
+            lote.append(normalizado)
+
+        # O actor já mudou de formato uma vez e tudo saiu 0 com `status: ok`.
+        # Gravar esses zeros em `metrics` distorce a aceleração e o percentil.
+        if len(lote) >= MIN_LOTE_SEM_METRICAS and all(_sem_metricas(i) for i in lote):
+            self.errors += 1
+            self.reason = "lote sem métricas: o formato do actor mudou?"
+            # Só os nomes das chaves: bastam para achar o formato novo
+            logger.error(
+                "tiktok.lote_sem_metricas",
+                extra={"itens": len(lote), "chaves": sorted(items[0])},
+            )
+            return
+
+        for normalizado in lote:
             yield normalizado
             total_collected += 1
 
