@@ -661,6 +661,10 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
 4. Descobriu uma armadilha nova ou corrigiu uma da lista acima? **Atualize este arquivo.**
 5. Não faça commit nem push sem eu pedir.
 
+**Equipes de agentes:** antes de montar uma, leia [`docs/AGENT_TEAMS.md`](docs/AGENT_TEAMS.md)
+(quando usar, dono de cada arquivo, regras que todo colega recebe, receitas). Ao terminar,
+registre o aprendizado na seção 10 do guia.
+
 ---
 
 ## Fluxo com o Notion
