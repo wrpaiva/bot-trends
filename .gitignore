@@ -80,3 +80,6 @@ Thumbs.db
 
 # Rótulos humanos da avaliação do prompt (TIE-26) — dado local, não vai para o git
 avaliacao/
+
+# Claude Code: permissões e env locais de cada máquina (as definições em .claude/agents/ são versionadas)
+.claude/settings.local.json
