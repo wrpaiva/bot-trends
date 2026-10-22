@@ -17,6 +17,7 @@ class _FakeCollector:
     def __init__(self, **kwargs):
         _FakeCollector.chamadas.append(kwargs)
         self.errors = 0
+        self.reason = None
 
     def __enter__(self):
         return self
@@ -69,3 +70,25 @@ def test_sem_apify_token_devolve_o_motivo_sem_chamar_a_apify(monkeypatch):
 
     assert res["status"] == "error" and "APIFY_TOKEN" in res["reason"]
     assert _FakeCollector.chamadas == []
+
+
+class _ColetorSemMetricas(_FakeCollector):
+    """Collector que descartou o lote por formato desconhecido (TIE-55)."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.errors = 1
+        self.reason = "lote sem métricas: formato do actor mudou?"
+
+
+def test_lote_sem_metricas_devolve_erro_com_o_motivo(monkeypatch):
+    db = mongomock.MongoClient().db
+    monkeypatch.setattr(tasks_mod, "TikTokApifyCollector", _ColetorSemMetricas)
+    monkeypatch.setattr(tasks_mod, "get_db", lambda: db)
+    monkeypatch.setattr(tasks_mod, "_breaker", lambda nome: None)
+    monkeypatch.setattr(tasks_mod.settings, "APIFY_TOKEN", "token-de-teste")
+
+    res = tasks_mod.collect_tiktok()
+
+    assert res["status"] == "error" and "formato" in res["reason"]
+    assert db.metrics.count_documents({}) == 0

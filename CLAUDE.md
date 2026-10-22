@@ -542,7 +542,10 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
 - **Métricas do TikTok sempre zeradas.** O `clockworks~tiktok-scraper` passou a devolver
   `playCount`/`diggCount`/`commentCount`/`shareCount` no primeiro nível do item (`stats` vem
   `None`), e `_normalize_item` só lia `stats`. Agora aceita os dois formatos; o teste usa um
-  item real do actor. Se o actor mudar de novo, o sintoma é `views`/`engagement` = 0.
+  item real do actor. Se o actor mudar de novo, o sintoma é `views`/`engagement` = 0 — e desde
+  a TIE-55 isso não passa calado: lote com ≥ 3 vídeos todos sem métrica é descartado (nada vai
+  para `metrics`), a task devolve `status: error` com `reason` e o log
+  `tiktok.lote_sem_metricas` traz as chaves do item (só os nomes) para achar o formato novo.
 - **Conteúdo sem produto disputava o ranking.** `src/domain/commercial.py` decide se um vídeo
   do TikTok vende algo: produto do TikTok Shop **ou** marca de venda no texto (loja, "link na
   bio", "comenta QUERO", R$, código de produto da Shopee, "achadinho"). Sem isso, fica fora da

@@ -200,4 +200,7 @@ def collect_tiktok():
             )
             count += 1
 
-    return _registra(breaker, _resultado(count, collector.errors))
+    resultado = _resultado(count, collector.errors)
+    if collector.reason:
+        resultado["reason"] = collector.reason
+    return _registra(breaker, resultado)

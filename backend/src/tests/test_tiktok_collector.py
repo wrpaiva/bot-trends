@@ -211,3 +211,73 @@ def test_publicacao_pelo_epoch_quando_nao_ha_iso():
 def test_sem_data_de_publicacao_fica_none():
     n = _normalize({"id": "v1"})
     assert n["published_at"] is None and n["has_shop_product"] is False
+
+
+# --- Lote sem métricas: formato do actor mudou (TIE-55) ----------------------
+#
+# O actor já trocou de formato uma vez (`stats` → primeiro nível) e toda métrica
+# saiu 0 com `status: ok`. Lote inteiro zerado não é dado: é formato que o
+# `_normalize_item` não conhece mais.
+
+
+def _handler_com_itens(itens):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/actor-runs/" in request.url.path:
+            return httpx.Response(200, json={"data": {"status": "SUCCEEDED"}})
+        if "/datasets/" in request.url.path:
+            return httpx.Response(200, json=itens)
+        return _run_ok(request)
+
+    return handler
+
+
+def _formato_desconhecido(vid: str) -> dict:
+    # Um terceiro formato hipotético: contadores aninhados num bloco novo
+    return {"id": vid, "text": "achadinho", "metricas": {"reproducoes": 5000, "curtidas": 90}}
+
+
+def test_lote_inteiro_sem_metricas_eh_descartado_e_conta_erro(caplog):
+    itens = [_formato_desconhecido(f"v{i}") for i in range(4)]
+
+    with caplog.at_level("ERROR"), _collector(_handler_com_itens(itens)) as c:
+        assert list(c.collect()) == []
+
+    assert c.errors == 1
+    assert "formato" in c.reason
+    # O log ajuda a achar o formato novo: nomes das chaves, nunca os valores
+    (rec,) = (r for r in caplog.records if r.getMessage() == "tiktok.lote_sem_metricas")
+    assert rec.itens == 4
+    assert rec.chaves == ["id", "metricas", "text"]
+
+
+def test_formatos_conhecidos_passam_no_lote():
+    itens = [
+        {**ITEM_APIFY_ATUAL, "id": "v1"},
+        {**ITEM_APIFY_ATUAL, "id": "v2"},
+        {"id": "v3", "stats": {"playCount": 10, "diggCount": 5}},
+    ]
+
+    with _collector(_handler_com_itens(itens)) as c:
+        coletados = list(c.collect())
+
+    assert [i["source_product_id"] for i in coletados] == ["v1", "v2", "v3"]
+    assert c.errors == 0 and c.reason is None
+
+
+def test_lote_com_alguns_zeros_segue_normal():
+    # Vídeo recém-publicado pode vir zerado; só o lote inteiro zerado é suspeito
+    itens = [{"id": "v1"}, {"id": "v2"}, {**ITEM_APIFY_ATUAL, "id": "v3"}]
+
+    with _collector(_handler_com_itens(itens)) as c:
+        assert len(list(c.collect())) == 3
+
+    assert c.errors == 0 and c.reason is None
+
+
+def test_lote_pequeno_zerado_nao_basta_para_acusar_formato():
+    itens = [{"id": "v1"}, {"id": "v2"}]
+
+    with _collector(_handler_com_itens(itens)) as c:
+        assert len(list(c.collect())) == 2
+
+    assert c.errors == 0
