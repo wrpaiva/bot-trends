@@ -23,3 +23,24 @@ def test_cursor_json_muito_aninhado_vira_400():
     with pytest.raises(HTTPException) as erro:
         decode_cursor(raw, "ranking", {"s": float, "p": str})
     assert erro.value.status_code == 400
+
+
+# TIE-57: bool é subclasse de int, então `true` não pode passar como campo int.
+@pytest.mark.parametrize("valor", [True, False])
+def test_cursor_com_bool_em_campo_int_vira_400(valor):
+    raw = encode_cursor("ranking", n=valor)
+    with pytest.raises(HTTPException) as erro:
+        decode_cursor(raw, "ranking", {"n": int})
+    assert erro.value.status_code == 400
+
+
+def test_cursor_com_int_legitimo_continua_valido():
+    raw = encode_cursor("ranking", n=7)
+    assert decode_cursor(raw, "ranking", {"n": int})["n"] == 7
+
+
+def test_cursor_com_bool_em_campo_float_vira_400():
+    raw = encode_cursor("ranking", s=True, p="abc")
+    with pytest.raises(HTTPException) as erro:
+        decode_cursor(raw, "ranking", {"s": float, "p": str})
+    assert erro.value.status_code == 400
