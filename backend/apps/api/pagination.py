@@ -47,7 +47,7 @@ def decode_cursor(raw: str, kind: str, campos: dict[str, type]) -> dict[str, Any
     try:
         preenchido = raw + "=" * (-len(raw) % 4)
         dados = json.loads(base64.urlsafe_b64decode(preenchido.encode()))
-    except (binascii.Error, ValueError, UnicodeDecodeError):
+    except (binascii.Error, ValueError, UnicodeDecodeError, RecursionError):
         raise HTTPException(status_code=400, detail="cursor inválido") from None
     if (
         not isinstance(dados, dict)
