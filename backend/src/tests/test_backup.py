@@ -91,6 +91,7 @@ def _arquivos(amb):
 def test_backup_gera_arquivo_contagens_e_registro_ok(ambiente):
     r = _roda(BACKUP, ambiente)
     assert r.returncode == 0, r.stderr
+    assert "banco vazio" not in r.stdout + r.stderr
 
     (archive,) = (n for n in _arquivos(ambiente) if n.endswith(".archive.gz"))
     assert archive.startswith("trends-") and not archive.endswith(".tmp")
@@ -102,6 +103,21 @@ def test_backup_gera_arquivo_contagens_e_registro_ok(ambiente):
     registro = ambiente["log"].read_text()
     assert "status: 'ok'" in registro and "backups.insertOne" in registro
     assert '"metrics":5' in registro.replace(" ", "")
+
+
+def test_dump_sem_colecao_avisa_banco_vazio_e_segue_ok(ambiente):
+    _stub(
+        ambiente["bin"],
+        "mongodump",
+        r"""
+for a in "$@"; do case "$a" in --archive=*) out="${a#--archive=}";; esac; done
+echo "conteudo" > "$out"
+""",
+    )
+    r = _roda(BACKUP, ambiente)
+    assert r.returncode == 0, r.stderr
+    assert "banco vazio" in r.stdout + r.stderr
+    assert "status: 'ok'" in ambiente["log"].read_text()
 
 
 def test_falha_no_dump_registra_failed_sem_vazar_senha(ambiente):

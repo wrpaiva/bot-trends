@@ -147,6 +147,19 @@ def test_backup_com_falha(db):
     assert res.problem and "disco cheio" in res.detail
 
 
+def test_analise_sem_metrica_nem_insight_nao_diz_que_ha_metricas(db):
+    res = mod.check_analysis(db)
+    assert not res.problem
+    assert "há métricas" not in res.detail
+    assert "nenhuma métrica" in res.detail
+
+
+def test_analise_com_metrica_e_sem_insight_eh_problema(db):
+    _metrica(db, "tiktok", 1)
+    res = mod.check_analysis(db)
+    assert res.problem and "há métricas" in res.detail
+
+
 def test_backup_velho(db):
     db["backups"].insert_one({"ts": utcnow() - dt.timedelta(hours=30), "status": "ok"})
     assert mod.check_backups(db).problem
@@ -202,6 +215,31 @@ def test_vinculo_antigo_que_nunca_leu_ofertas_e_problema(db):
     _vinculado(db, "velho", criado_h=40)
     res = mod.check_ml_offers(db)
     assert res.problem and "1 de 1" in res.detail
+
+
+def test_ofertas_informa_quantos_estao_sem_data(db):
+    _vinculado(db, "a", ofertas_h=30)
+    db["products"].insert_one(
+        {"product_id": "sd", "source": "mercadolivre", "linked_videos": ["v1"]}
+    )
+    res = mod.check_ml_offers(db)
+    assert res.problem and "1 sem data" in res.detail
+
+
+def test_ofertas_sem_nenhuma_data_nao_cita_idade(db):
+    db["products"].insert_one(
+        {"product_id": "sd", "source": "mercadolivre", "linked_videos": ["v1"]}
+    )
+    res = mod.check_ml_offers(db)
+    assert res.problem and "sem data" in res.detail
+    assert "mais velha" not in res.detail and "?" not in res.detail
+
+
+def test_ofertas_todas_datadas_nao_menciona_sem_data(db):
+    _vinculado(db, "a", ofertas_h=30)
+    res = mod.check_ml_offers(db)
+    assert "sem data" not in res.detail
+    assert "(mais velha há 30.0 h, limite 12.0 h)" in res.detail
 
 
 def test_sem_produto_vinculado_nao_alerta(db):

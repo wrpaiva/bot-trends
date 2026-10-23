@@ -78,7 +78,12 @@ def check_analysis(db) -> HealthCheck:
     if idade is None:
         # Sem insight nenhum só é problema se já há o que analisar
         tem_metricas = db["metrics"].find_one({}, projection={"_id": 1}) is not None
-        return HealthCheck("analise", tem_metricas, "há métricas, mas nenhum insight gerado")
+        detalhe = (
+            "há métricas, mas nenhum insight gerado"
+            if tem_metricas
+            else "nenhuma métrica nem insight ainda"
+        )
+        return HealthCheck("analise", tem_metricas, detalhe)
     return HealthCheck(
         "analise",
         idade > ANALYSIS_MAX_AGE,
@@ -154,16 +159,24 @@ def check_ml_offers(db) -> HealthCheck:
     # Sem data nenhuma: não dá para dizer que está em dia
     velhas = [i for i in idades if i is None or i > OFERTAS_MAX_AGE]
     pior = max((i for i in idades if i is not None), default=None)
-    pior_txt = _horas(pior) if pior is not None else "?"
-    if velhas:
+    sem_data = sum(1 for i in idades if i is None)
+    limite = _horas(OFERTAS_MAX_AGE)
+    if pior is None:
+        # Nenhuma data para citar idade
         detalhe = (
             f"{len(velhas)} de {len(vinculados)} produtos vinculados sem ofertas renovadas "
-            f"(mais velha há {pior_txt}, limite {_horas(OFERTAS_MAX_AGE)})"
+            f"({sem_data} sem data, limite {limite})"
+        )
+    elif velhas:
+        extra = f", {sem_data} sem data" if sem_data else ""
+        detalhe = (
+            f"{len(velhas)} de {len(vinculados)} produtos vinculados sem ofertas renovadas "
+            f"(mais velha há {_horas(pior)}{extra}, limite {limite})"
         )
     else:
         detalhe = (
-            f"ofertas de {len(vinculados)} produtos vinculados renovadas há até {pior_txt} "
-            f"(limite {_horas(OFERTAS_MAX_AGE)})"
+            f"ofertas de {len(vinculados)} produtos vinculados renovadas há até {_horas(pior)} "
+            f"(limite {limite})"
         )
     return HealthCheck("ofertas_ml", bool(velhas), detalhe)
 

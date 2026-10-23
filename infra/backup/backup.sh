@@ -76,7 +76,13 @@ mv "$tmp" "$arq"
 padrao='s/.*done dumping `?'"${MONGO_DB}"'\.([^` ]+)`? \(([0-9]+) documents?\).*/"\1": \2/p'
 contagens=$(sed -nE "$padrao" "$errf" | paste -sd, -)
 echo "{${contagens}}" >"$base.counts.json"
-log "ok: $(basename "$arq") ($(stat -c %s "$arq") bytes) {${contagens}}"
+if [ -z "$contagens" ]; then
+  # Dump sem nenhuma collection: não é falha (o registro segue `ok`), mas não
+  # é backup de dados — o log não pode fingir que é
+  log "ok, mas banco vazio: $(basename "$arq") ($(stat -c %s "$arq") bytes) — mongodump não listou nenhuma collection em $MONGO_DB"
+else
+  log "ok: $(basename "$arq") ($(stat -c %s "$arq") bytes) {${contagens}}"
+fi
 
 # 3a. remoto do rclone (credenciais nas RCLONE_CONFIG_<REMOTO>_* do compose)
 envia() { # <etapa> <comando...> — mesmo teto e mesma falha do upload
