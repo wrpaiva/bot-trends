@@ -39,6 +39,9 @@ def _tipo_ok(valor: Any, tipo: type) -> bool:
             and abs(valor) <= _MAIOR_NUMERO
             and math.isfinite(valor)
         )
+    if tipo is not bool and isinstance(valor, bool):
+        # bool é int em Python: True passaria como int
+        return False
     return isinstance(valor, tipo)
 
 
@@ -54,5 +57,5 @@ def decode_cursor(raw: str, kind: str, campos: dict[str, type]) -> dict[str, Any
         or dados.get("k") != kind
         or any(not _tipo_ok(dados.get(f), t) for f, t in campos.items())
     ):
-        raise HTTPException(status_code=400, detail="cursor inválido") from None
+        raise HTTPException(status_code=400, detail="cursor inválido")
     return dados
