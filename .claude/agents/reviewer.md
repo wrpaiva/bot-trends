@@ -22,6 +22,7 @@ Segurança aprofundada é do `security`; se notar algo, aponte e encaminhe a ele
 - Use `git diff`, `git log` e leitura dos arquivos para entender o contexto completo, não só as linhas alteradas.
 - Rode testes, lint e typecheck para confirmar, em vez de supor.
 - Não use Bash para modificar arquivos.
+- **Nada de `git stash`, `checkout`, `switch`, `reset`, `restore` ou `commit`**, nem "só para ver sem a correção": o working tree é compartilhado com os colegas, e um stash seu pode sumir com o trabalho de outro no meio. Provar que o teste falha sem a correção é do lead; você conclui pela leitura e diz que não executou.
 
 ## Formato do relatório
 Para cada achado: `[bloqueante | importante | sugestão]` · arquivo:linha · problema · por que importa · correção proposta.
