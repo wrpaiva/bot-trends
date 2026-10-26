@@ -246,7 +246,7 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    `apps.prompt_eval` (README, "Avaliação do prompt") mede estabilidade por temperatura e a
    concordância com rótulos humanos, por versão. Temperatura 0,2 escolhida com medição em
    2026-10-05 (±1,3 no score, 98% de classificação estável; 0,7 dobra a variação).
-6. **A coleta do TikTok está parada desde ~2026-09-25: crédito da Apify esgotado.** O actor
+6. **A coleta do TikTok parou de ~2026-09-25 a 2026-10-24: crédito da Apify esgotado.** O actor
    devolve `402 Payment Required` a cada ciclo. O worker com o código antigo retentava e
    devolvia `status: ok, inserted: 0` — ninguém viu por 2,7 dias (achado pelo check de saúde da
    TIE-39). Com a análise rodando sobre métricas cada vez mais velhas, o ranking congela e, em
@@ -254,6 +254,11 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    mostrava US$ 4,56 de US$ 5 usados (ciclo 24/09–23/10) e o actor ainda devolvia 402 — com
    pouco saldo a Apify recusa a execução. Upgrade de plano ou recarga destrava; sem isso, só na
    virada do ciclo. Saldo da conta (grátis): `GET https://api.apify.com/v2/users/me/limits`.
+   Voltou sozinha na virada do ciclo (24/10): 15 vídeos por coleta, US$ 0,34 em 2,5 dias.
+   **O LLM tem o mesmo problema:** desde 2026-10-24 a OpenAI devolve 429
+   `credit_balance_exhausted`, o circuito do `llm` fica aberto e 100% dos insights caem no
+   fallback; o vínculo TikTok → ML (TIE-18) também para (`circuit_open`). Só recarga destrava.
+   Ver o motivo: uma chamada mínima a `/chat/completions` traz `error.code` na resposta.
 7. **As hashtags do TikTok definem o que o motor monitora.** `fyp` trazia conteúdo global e
    antigo (vídeos em árabe, de 2022); desde 2026-09-24 o `backend/.env` usa
    `tiktokmademebuyit,achadinhos,achadosdashopee`. **Custo:** ~US$ 0,0037 por vídeo
