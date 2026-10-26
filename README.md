@@ -514,40 +514,44 @@ Desde a TIE-23 o relatório traz mais três coisas:
   seguinte e as posições pertencem à mesma categoria/ranking, com a data, a posição de antes e de depois e o
   percentil em que o score punha o produto no corte anterior.
 
-**Resultado em 2026-10-18** (12 dias de coleta, 11 dias com corte, 40 cortes de até 84 produtos;
-`--k 5`). Spearman / prec@5 (AUC nos desfechos 0/1), média dos cortes:
+**Resultado em 2026-10-26** (20 dias de coleta, de 06/10 a 26/10; 19 dias com corte, 71 cortes de
+até 85 produtos em 6 h e 68 em 24 h; `--k 5`; subida forte já exigindo que o ganho se sustente,
+TIE-59). Spearman / prec@5 (AUC nos desfechos 0/1), média dos cortes:
 
 | Horizonte | Desfecho | `score` | `posicao_atual` | `preco` |
 |---|---|---|---|---|
-| 6 h | `posicao_futura` | +0,95 / 0,70 | **+0,97 / 0,97** | −0,19 / 0,16 |
-| 6 h | `ganho_posicoes` | −0,01 / 0,06 | −0,01 / 0,04 | +0,02 / 0,11 |
-| 6 h | `entrou_top5` (base 0,01) | AUC 0,63 | AUC 0,67 | AUC 0,54 |
-| 24 h | `posicao_futura` | +0,93 / 0,72 | **+0,95 / 0,96** | −0,20 / 0,16 |
-| 24 h | `entrou_top5` (base 0,02) | AUC 0,83 | AUC 0,84 | AUC 0,69 |
+| 6 h | `posicao_futura` | +0,94 / 0,64 | **+0,97 / 0,98** | −0,06 / 0,17 |
+| 6 h | `ganho_posicoes` | −0,01 / 0,03 | −0,00 / 0,03 | +0,01 / 0,08 |
+| 6 h | `entrou_top5` (base 0,01) | AUC 0,75 | AUC 0,78 | AUC 0,62 |
+| 24 h | `posicao_futura` | +0,92 / 0,65 | **+0,95 / 0,96** | −0,06 / 0,17 |
+| 24 h | `entrou_top5` (base 0,02) | AUC 0,85 | AUC 0,86 | AUC 0,70 |
 
 `score − posicao_atual`, IC 95% por dia:
 
 | Horizonte | Desfecho | Métrica | Diferença |
 |---|---|---|---|
-| 6 h | `posicao_futura` | prec@5 | **−0,33 [−0,43, −0,22]** |
-| 24 h | `posicao_futura` | prec@5 | **−0,27 [−0,40, −0,14]** |
+| 6 h | `posicao_futura` | prec@5 | **−0,37 [−0,44, −0,29]** |
+| 24 h | `posicao_futura` | prec@5 | **−0,34 [−0,42, −0,25]** |
 | 6 h e 24 h | `ganho_posicoes`, `entrou_top5` | todas | ≈ 0, intervalo cruza o zero |
 
-Subidas fortes: com 10 posições, 2 produtos em 12 dias. Com `--subida 5`, 4 (6 h) e 5 (24 h).
-No corte anterior, o score punha esses produtos no percentil 0,26–0,31 e a posição atual no
-0,25–0,29. AUC 0,38: os dois ficam **abaixo do acaso**, porque quem sobe vem de baixo.
+Subidas fortes sustentadas: com 10 posições, 1 produto em 20 dias (18º → 2º, em 08/10), nos dois
+horizontes. Com `--subida 5`, 4 (6 h) e 8 (24 h). Todos estão no mesmo ranking nas duas pontas e
+se mantêm na coleta seguinte, como a TIE-59 exige; antes dela, 12 dias já davam 2 com 10 posições. No corte anterior, o score punha esses produtos no percentil 0,12–0,32 e a posição
+atual no 0,13–0,31. Com 10 posições, AUC 0,26 (score) e 0,28 (posição): os dois ficam **abaixo do
+acaso**, porque quem sobe vem de baixo.
 
 **Conclusão: no Mercado Livre, o score não agrega sobre o ranking do próprio `/highlights`.**
-1. Ele perde para a posição atual em prever a posição seguinte, e a diferença não é sorte: 11 dias,
-   intervalo longe do zero, mesmo quadro de 14/10 com 8 dias.
+1. Ele perde para a posição atual em prever a posição seguinte, e a diferença não é sorte: 19 dias,
+   intervalo longe do zero, o mesmo quadro de 14/10 (8 dias) e de 18/10 (11 dias).
 2. Para quem vai subir, que é o que importa, ele empata com a posição. O empate está nos dois
    sentidos: nenhum dos dois prevê quem ganha posições.
-3. Subida forte no top 20 é rara demais (2 a 5 em 12 dias, em ~80 produtos) para treinar ou
+3. Subida forte no top 20 é rara demais (1 a 8 em 20 dias, em ~85 produtos) para treinar ou
    validar um preditor com esta coleta.
 
 Esperar mais dias não muda isso: a diferença já é estável e o evento que importa é raro. O que muda
 a resposta é **um sinal que a posição não tem**, e hoje só resta um: o vídeo do TikTok ligado ao
-produto (TIE-18, parte 2, que depende da coleta do TikTok voltar). Os outros dois candidatos foram
+produto, e ele também não serve aqui: nenhum dos produtos vinculados está no `/highlights` (TIE-52),
+então não há desfecho para medir. Os outros dois candidatos foram
 medidos em 2026-10-18 e não servem:
 - **coleta além do top 20**: o `/highlights` devolve exatamente 20 itens por categoria;
 - **termos mais buscados** (`/trends/MLB/{categoria}`, 50 termos em ordem, sem volume): só 6 dos 85
