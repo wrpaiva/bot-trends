@@ -14,6 +14,7 @@ from apps.worker import tasks_trend
 T0 = dt.datetime(2026, 10, 10, 12, tzinfo=dt.UTC)
 # Coleta real: o intervalo de 6 h sai com 5,99 h (2026-10-14)
 T1 = T0 + dt.timedelta(hours=5.99)
+T2 = T1 + dt.timedelta(hours=5.99)
 
 # Posição em T0 e em T1 (None = saiu do top 20). m5 entra no top 5; m7 cai
 POSICOES = {
@@ -56,13 +57,14 @@ def db(monkeypatch):
         _leitura(db, pid, T0, antes, preco=10.0 * (n + 1))
         if depois is not None:
             _leitura(db, pid, T1, depois, preco=10.0 * (n + 1))
+            _leitura(db, pid, T2, depois, preco=10.0 * (n + 1))
     return db
 
 
 def _corte(db, **kw):
     rel = bt.run_backtest(db, source="mercadolivre", horizon_hours=6, k=2, min_pool=3, **kw)
-    assert [c["T"] for c in rel["cortes"]] == [T0.isoformat()]
-    return rel, {i["product_id"]: i for i in rel["cortes"][0]["itens"]}
+    corte = next(c for c in rel["cortes"] if c["T"] == T0.isoformat())
+    return rel, {i["product_id"]: i for i in corte["itens"]}
 
 
 def test_desfechos_saem_da_posicao_no_ranking(db):
@@ -167,6 +169,30 @@ def test_subida_forte_so_vale_para_quem_podia_subir_tanto(db):
     assert m["auc"] == pytest.approx(2 / 4)
 
 
+def test_pico_de_uma_leitura_nao_conta_como_subida_forte(db):
+    _leitura(db, "m5", T2, 6)
+    _, itens = _corte(db, subida=3)
+    assert itens["m5"]["subida_forte"] == 0
+
+
+def test_subida_forte_sem_leitura_de_confirmacao_fica_fora_do_desfecho(db):
+    db["metrics"].delete_many({"ts": T2})
+    _, itens = _corte(db, subida=3)
+    assert itens["m5"]["subida_forte"] is None
+
+
+def test_troca_de_categoria_nao_compara_posicoes_de_rankings_diferentes(db):
+    db["metrics"].update_one({"product_id": "m5", "ts": T1}, {"$set": {"category": "MLB2"}})
+    _, itens = _corte(db, subida=3)
+    assert "m5" not in itens
+
+
+def test_troca_de_categoria_na_confirmacao_deixa_subida_indefinida(db):
+    db["metrics"].update_one({"product_id": "m5", "ts": T2}, {"$set": {"category": "MLB2"}})
+    _, itens = _corte(db, subida=3)
+    assert itens["m5"]["subida_forte"] is None
+
+
 def test_eventos_listam_cada_subida_uma_vez_com_data_e_percentil(db):
     rel, _ = _corte(db, subida=3)
     (ev,) = rel["eventos"]
@@ -185,11 +211,16 @@ def test_comparacao_precisa_de_dois_dias(db):
 
 def test_comparacao_agrupa_os_cortes_por_dia(db):
     # Mesmo ranking um dia depois: dois dias, um corte em cada
-    d1, d1b = T0 + dt.timedelta(days=1), T1 + dt.timedelta(days=1)
+    d1, d1b, d1c = (
+        T0 + dt.timedelta(days=1),
+        T1 + dt.timedelta(days=1),
+        T2 + dt.timedelta(days=1),
+    )
     for n, (pid, (antes, depois)) in enumerate(POSICOES.items()):
         _leitura(db, pid, d1, antes, preco=10.0 * (n + 1))
         if depois is not None:
             _leitura(db, pid, d1b, depois, preco=10.0 * (n + 1))
+            _leitura(db, pid, d1c, depois, preco=10.0 * (n + 1))
     rel = bt.run_backtest(db, source="mercadolivre", horizon_hours=6, k=2, min_pool=3)
 
     r = rel["comparacao"]["posicao_atual"]["posicao_futura"]["spearman"]

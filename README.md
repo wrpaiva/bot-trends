@@ -495,7 +495,7 @@ O score empata ou fica levemente à frente do baseline, e os dois batem a popula
 com 5–7 vídeos por corte e cortes que compartilham vídeos, nada disso é significativo. O LLM fica
 de fora (não dá para refazer as chamadas do passado). **Rode de novo quando a coleta voltar.**
 
-**Mercado Livre (`--source mercadolivre`, TIE-46).** O ML não dá vendas, mas o `/highlights` é o
+**Mercado Livre (`--source mercadolivre`, TIE-46/TIE-59).** O ML não dá vendas, mas o `/highlights` é o
 ranking de mais vendidos: o desfecho é a posição na coleta seguinte. Entram os produtos que
 estavam no ranking em T; preditores `score`, `posicao_atual` e `preco` (o mais barato primeiro);
 desfechos `posicao_futura`, `ganho_posicoes` e `entrou_top5` (0/1, só quem estava fora do top 5;
@@ -510,7 +510,8 @@ Desde a TIE-23 o relatório traz mais três coisas:
 - **`score − baseline`** com **intervalo de 95% por bootstrap de dias**. Cortes do mesmo dia veem
   quase o mesmo ranking e não são amostras independentes. Por isso cada dia vira uma média, e os
   dias é que são reamostrados. Intervalo que não cruza o zero aparece marcado `← não é sorte`.
-- **Lista das subidas fortes**, uma por produto, com a data, a posição de antes e de depois e o
+- **Lista das subidas fortes**, uma por produto, somente quando o ganho se mantém na coleta
+  seguinte e as posições pertencem à mesma categoria/ranking, com a data, a posição de antes e de depois e o
   percentil em que o score punha o produto no corte anterior.
 
 **Resultado em 2026-10-18** (12 dias de coleta, 11 dias com corte, 40 cortes de até 84 produtos;
