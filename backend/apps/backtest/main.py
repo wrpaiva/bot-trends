@@ -24,8 +24,9 @@ observável. Entram os produtos que estavam no ranking em T.
 - preditores: `score`, `posicao_atual` e `preco` (o mais barato primeiro);
 - desfechos: `posicao_futura`, `ganho_posicoes` (posições ganhas),
   `entrou_top5` (0/1, só para quem estava fora do top 5 em T) e
-  `subida_forte` (0/1, ganhou `--subida` posições ou mais — o "viralizou" do
-  ML, TIE-23; só para quem estava abaixo dessa posição em T). Desfecho 0/1 é
+  `subida_forte` (0/1, ganhou `--subida` posições ou mais e sustentou o ganho
+  na coleta seguinte, sempre dentro da mesma categoria — o "viralizou" do
+  ML, TIE-23/TIE-59; só para quem estava abaixo dessa posição em T). Desfecho 0/1 é
   medido como acerto no top-k contra a `taxa_base` e como AUC (0,5 = acaso).
   Quem some do ranking na coleta seguinte conta como 21º — mas só se a
   categoria dele foi coletada; sem isso, sumir pode ser falha do /highlights.
@@ -156,10 +157,11 @@ def _ranking_em(db, ts: dt.datetime) -> dict[str, tuple[int, str | None]]:
     }
 
 
-def _itens_ml(db, pontuados, t, t_futuro, subida: int) -> list[dict]:
+def _itens_ml(db, pontuados, t, t_futuro, t_confirmacao, subida: int) -> list[dict]:
     if t_futuro is None:
         return []
     agora, depois = _ranking_em(db, t), _ranking_em(db, t_futuro)
+    confirmacao = _ranking_em(db, t_confirmacao) if t_confirmacao is not None else {}
     coletadas = {cat for _, cat in depois.values()}
     itens = []
     for ti, score in pontuados:
@@ -167,11 +169,24 @@ def _itens_ml(db, pontuados, t, t_futuro, subida: int) -> list[dict]:
             continue
         pos, categoria = agora[ti.product_id]
         if ti.product_id in depois:
+            if depois[ti.product_id][1] != categoria:
+                continue
             pos_fut = depois[ti.product_id][0]
         elif categoria in coletadas:
             pos_fut = FORA_DO_RANKING
         else:
             continue
+        subida_forte = None
+        if pos > subida and t_confirmacao is not None:
+            confirmado = confirmacao.get(ti.product_id)
+            if confirmado is not None:
+                pos_confirmada = confirmado[0] if confirmado[1] == categoria else None
+            elif categoria in {cat for _, cat in confirmacao.values()}:
+                pos_confirmada = FORA_DO_RANKING
+            else:
+                pos_confirmada = None
+            if pos_confirmada is not None:
+                subida_forte = int(pos - pos_fut >= subida and pos - pos_confirmada >= subida)
         itens.append(
             {
                 "product_id": ti.product_id,
@@ -186,7 +201,7 @@ def _itens_ml(db, pontuados, t, t_futuro, subida: int) -> list[dict]:
                 "ganho_posicoes": pos - pos_fut,
                 "entrou_top5": int(pos_fut <= TOP_N) if pos > TOP_N else None,
                 # Do 1º ao `subida`-ésimo não dá para ganhar `subida` posições
-                "subida_forte": int(pos - pos_fut >= subida) if pos > subida else None,
+                "subida_forte": subida_forte,
             }
         )
     return itens
@@ -211,6 +226,7 @@ def _corte(
     *,
     source,
     t_futuro,
+    t_confirmacao,
     horizon_hours,
     window_hours,
     limit_products,
@@ -238,7 +254,7 @@ def _corte(
     ]
 
     if source == "mercadolivre":
-        itens = _itens_ml(db, pontuados, t, t_futuro, subida)
+        itens = _itens_ml(db, pontuados, t, t_futuro, t_confirmacao, subida)
     else:
         itens = _itens_tiktok(db, pontuados, t, horizon_hours)
     if len(itens) < min_pool:
@@ -339,11 +355,17 @@ def run_backtest(
     cortes_ts = sorted({ensure_utc(t) for t in db["metrics"].distinct("ts", {"source": source})})
     cortes, pulados = [], 0
     for t in cortes_ts:
+        t_futuro = _proximo(cortes_ts, t, horizon_hours)
         c = _corte(
             db,
             t,
             source=source,
-            t_futuro=_proximo(cortes_ts, t, horizon_hours),
+            t_futuro=t_futuro,
+            t_confirmacao=(
+                _proximo(cortes_ts, t_futuro, horizon_hours)
+                if source == "mercadolivre" and t_futuro is not None
+                else None
+            ),
             horizon_hours=horizon_hours,
             window_hours=window_hours,
             limit_products=limit_products,
