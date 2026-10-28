@@ -333,6 +333,12 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
 - **Mongo e Redis não são mais publicados em `0.0.0.0`** — só em `127.0.0.1`, e as portas do
   host viraram configuráveis (`MONGO_HOST_PORT`, `REDIS_HOST_PORT`, `API_HOST_PORT`,
   `WEB_HOST_PORT`, `WEB_DEV_HOST_PORT`) para conviver com outros projetos na mesma máquina.
+  **API e dashboard seguiam em `0.0.0.0` até a TIE-62** (achado no QA de 2026-10-27): como o
+  nginx do `web` injeta a `X-API-Key`, qualquer máquina da rede usava a API sem chave. Agora todo
+  serviço do compose base publica em `127.0.0.1` e `test_health.py` falha se não. **Serviço novo
+  com porta: `127.0.0.1:` na frente.** Abrir para a rede é num `docker-compose.override.yml`
+  (no `.gitignore`) com `ports: !override [...]` — sem o `!override` o compose soma as duas
+  publicações na mesma porta e a subida falha.
 - **`get_db()` abria um `MongoClient` novo a cada chamada.** Agora é um cliente por processo
   (`mongo.get_client()`), fechado no `lifespan` da API; no worker, `worker_process_init` descarta
   o cliente herdado do fork, porque `MongoClient` não é fork-safe. Não volte a instanciar

@@ -114,7 +114,18 @@ como o uid `BACKUP_UID` (default 1000): se `id -u` não der 1000, ponha o seu em
 `up` — criada pelo Docker ela nasce `root`, e todo backup falha com `permission denied`.
 
 Portas ocupadas por outro projeto? Troque `API_HOST_PORT`, `WEB_HOST_PORT`, `MONGO_HOST_PORT`,
-`REDIS_HOST_PORT` e `WEB_DEV_HOST_PORT` no `.env` da raiz. Mongo e Redis só escutam em `127.0.0.1`.
+`REDIS_HOST_PORT` e `WEB_DEV_HOST_PORT` no `.env` da raiz. **Todas as portas escutam só em
+`127.0.0.1`** — `test_health.py` falha se um serviço publicar em outro endereço. O motivo do
+dashboard: o nginx do `web` põe a `X-API-Key` em toda chamada a `/api`, então quem alcança a porta
+dele usa a API inteira sem chave; e o Docker publica por fora do ufw. Precisa abrir para outra
+máquina da rede (celular, por exemplo)? Faça de propósito, num `docker-compose.override.yml`
+(fora do git, carregado sozinho pelo compose), sabendo que a rede inteira ganha a API:
+
+```yaml
+services:
+  web:
+    ports: !override ["${WEB_HOST_PORT:-80}:80"]   # Compose ≥ 2.24.4
+```
 
 ### 3️⃣ Migrações, categorias e backfill (nesta ordem)
 
