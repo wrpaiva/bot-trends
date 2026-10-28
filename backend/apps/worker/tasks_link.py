@@ -22,6 +22,7 @@ vincular e renovado por `refresh_ml_offers`. Não vira leitura em `metrics`: o
 produto não entra no ranking nem no percentil do ML.
 """
 
+import datetime as dt
 import logging
 
 from celery import shared_task
@@ -63,14 +64,23 @@ def _pendentes(db, limite: int) -> list[dict]:
     Vídeos comerciais em português ainda sem resultado (ou com `erro`), do mais
     novo para o mais velho. A busca é no catálogo brasileiro: vídeo em outro
     idioma não vende produto do ML.
+
+    Vídeo com mais de `TREND_MAX_AGE_DAYS` fica de fora (TIE-63): a análise o
+    descarta (`is_too_old`), então o vínculo nunca chegaria ao ranking e só
+    gastaria LLM. Ele não ganha marca, para voltar se o corte mudar. Sem
+    `published_at` segue elegível, como na análise.
     """
+    corte = utcnow() - dt.timedelta(days=settings.TREND_MAX_AGE_DAYS)
     cursor = (
         db["products"]
         .find(
             {
                 "source": "tiktok",
                 "language": "pt",
-                "$or": [{"ml_match": {"$exists": False}}, {"ml_match.status": "erro"}],
+                "$and": [
+                    {"$or": [{"ml_match": {"$exists": False}}, {"ml_match.status": "erro"}]},
+                    {"$or": [{"published_at": {"$gte": corte}}, {"published_at": None}]},
+                ],
             },
             {"_id": 0, "product_id": 1, "title": 1, "has_shop_product": 1},
         )

@@ -238,6 +238,50 @@ def test_so_video_comercial_em_portugues_e_sem_processamento_anterior(db):
     assert _match(db, "feito") == {"status": "sem_produto"}
 
 
+def test_video_velho_demais_para_o_ranking_nao_e_processado(db, monkeypatch):
+    # TIE-63: a análise descarta vídeo com mais de TREND_MAX_AGE_DAYS; vincular
+    # esse vídeo só gasta LLM e busca no ML, porque ele nunca chega ao ranking
+    monkeypatch.setattr(mod.settings, "TREND_MAX_AGE_DAYS", 30)
+    _video(db, "novo", BROCAS, published_at=utcnow() - dt.timedelta(days=29))
+    _video(db, "velho", BROCAS, published_at=utcnow() - dt.timedelta(days=31))
+    _video(db, "velho_erro", BROCAS, published_at=dt.datetime(2024, 6, 18, tzinfo=dt.UTC))
+    db["products"].update_one(
+        {"product_id": "velho_erro"}, {"$set": {"ml_match": {"status": "erro"}}}
+    )
+
+    res = mod.link_tiktok_ml()
+
+    assert res["processed"] == 1
+    assert _match(db, "novo")["status"] == "vinculado"
+    # Sem marca: volta a ser elegível se o corte mudar
+    assert "ml_match" not in db["products"].find_one({"product_id": "velho"})
+    assert _match(db, "velho_erro") == {"status": "erro"}
+    assert _Extrator.chamadas == [BROCAS]
+
+
+def test_video_sem_data_de_publicacao_continua_elegivel(db):
+    # Como na análise (is_too_old(None) é False): sem data não há como provar que é velho
+    _video(db, "nulo", BROCAS, published_at=None)
+    _video(db, "ausente", BROCAS)
+    db["products"].update_one({"product_id": "ausente"}, {"$unset": {"published_at": ""}})
+
+    res = mod.link_tiktok_ml()
+
+    assert res["processed"] == 2
+    assert _match(db, "nulo")["status"] == "vinculado"
+    assert _match(db, "ausente")["status"] == "vinculado"
+
+
+def test_vinculo_ja_gravado_de_video_velho_fica_como_esta(db):
+    antigo = {"status": "vinculado", "ml_catalog_id": "MLB9", "consulta": "potes de bambu"}
+    _video(db, "v1", BROCAS, published_at=utcnow() - dt.timedelta(days=400), ml_match=antigo)
+
+    res = mod.link_tiktok_ml()
+
+    assert res["processed"] == 0
+    assert _match(db, "v1") == antigo
+
+
 def test_erro_volta_a_ser_tentado_no_proximo_ciclo(db):
     _video(db, "v1", BROCAS, ml_match={"status": "erro"})
 
