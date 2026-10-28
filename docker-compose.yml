@@ -102,7 +102,7 @@ services:
       # precisa de CORS. Só liste aqui outra origem de browser que chame a API direto.
       CORS_ORIGINS: ${CORS_ORIGINS:-}
     ports:
-      - "${API_HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
     networks:
       - backend
       - frontend
@@ -223,7 +223,7 @@ services:
     environment:
       API_KEY: ${API_KEY:?defina API_KEY no .env da raiz}
     ports:
-      - "${WEB_HOST_PORT:-80}:80"
+      - "127.0.0.1:${WEB_HOST_PORT:-80}:80"
     networks:
       - frontend
     depends_on:
@@ -256,7 +256,7 @@ services:
       API_KEY: ${API_KEY:?defina API_KEY no .env da raiz}
       API_PROXY_TARGET: http://api:8000
     ports:
-      - "${WEB_DEV_HOST_PORT:-5173}:5173"
+      - "127.0.0.1:${WEB_DEV_HOST_PORT:-5173}:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules

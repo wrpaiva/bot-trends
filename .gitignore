@@ -10,6 +10,8 @@ credentials.json
 token.json
 !.env.example
 !backend/.env.example
+# Override local (ex.: abrir o dashboard para a rede, TIE-62) — escolha de cada máquina
+docker-compose.override.yml
 
 # ===========================================
 # 🐍 Python

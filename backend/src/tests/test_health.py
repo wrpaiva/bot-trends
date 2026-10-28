@@ -207,3 +207,24 @@ def test_agendamento_do_beat_sobrevive_a_recriar_o_container():
     assert dockerfile.index("mkdir -p /app/beat") < dockerfile.index(
         "chown -R appuser:appgroup /app"
     )
+
+
+@pytest.mark.skipif(not (RAIZ / "docker-compose.yml").exists(), reason="compose fora do container")
+def test_compose_base_so_publica_em_localhost():
+    # O Docker publica por fora do ufw, e o nginx do `web` injeta a X-API-Key
+    # (TIE-27): dashboard em 0.0.0.0 dava a API inteira, sem chave, a qualquer
+    # máquina da rede (TIE-62). Na VPS o prod zera as portas com `!reset []`.
+    # Abrir para a rede local é de propósito, num override fora do git.
+    yaml = pytest.importorskip("yaml")
+
+    servicos = yaml.safe_load((RAIZ / "docker-compose.yml").read_text())["services"]
+    abertas = []
+    for nome, svc in servicos.items():
+        for porta in svc.get("ports", []):
+            if isinstance(porta, dict):
+                ip = porta.get("host_ip")
+            else:
+                ip = str(porta).split(":")[0] if str(porta).count(":") >= 2 else None
+            if ip != "127.0.0.1":
+                abertas.append(f"{nome}: {porta}")
+    assert not abertas, f"porta publicada fora de 127.0.0.1: {abertas}"
