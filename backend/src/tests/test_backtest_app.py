@@ -67,6 +67,26 @@ def test_corte_compara_score_e_baseline_com_o_ganho_futuro(db):
     assert rel["resumo"]["views_por_hora"]["ganho_views_h"]["spearman"]["n"] == 1
 
 
+def test_relatorio_de_calibracao_tiktok_mede_percentis_e_limiares(db):
+    rel = bt.run_backtest(db, horizon_hours=6, k=2, min_pool=3, calibration_thresholds=(0, 50, 101))
+    calibracao = rel["calibracao"]
+    assert calibracao["n_scores"] == 6
+    assert calibracao["dias"] == 1
+    assert set(calibracao["percentis"]) == {"p50", "p90", "p95", "p99"}
+    assert calibracao["limiares"]["0"]["candidatos"] == 6
+    assert calibracao["limiares"]["0"]["candidatos_por_dia"] == 6
+    assert calibracao["limiares"]["101"]["candidatos"] == 0
+    assert any("cooldown" in texto for texto in calibracao["limitacoes"])
+    assert any("desfecho futuro" in texto for texto in calibracao["limitacoes"])
+
+
+def test_relatorio_de_calibracao_vazio_nao_divide_por_zero():
+    db = mongomock.MongoClient(tz_aware=True).db
+    rel = bt.run_backtest(db, calibration_thresholds=(85,))
+    assert rel["calibracao"]["percentis"]["p50"] is None
+    assert rel["calibracao"]["limiares"]["85"]["percentual"] is None
+
+
 def test_score_no_corte_nao_ve_o_futuro(db):
     antes = bt.run_backtest(db, horizon_hours=6, k=2, min_pool=3)["cortes"][0]["itens"]
 
@@ -105,6 +125,8 @@ def test_tabela_avisa_quando_o_pool_e_pequeno_para_o_k(db):
     texto = bt._tabela(bt.run_backtest(db, horizon_hours=6, k=3, min_pool=3))
     assert "AVISO" in texto
     assert "views_por_hora" in texto
+    assert "Calibracao TikTok" in texto
+    assert "sem cooldown" in texto
 
 
 def test_main_imprime_a_tabela(db, monkeypatch, capsys):

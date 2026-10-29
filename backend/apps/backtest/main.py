@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 
 from apps.worker import tasks_trend
 from src.domain.backtest import (
@@ -298,6 +299,45 @@ def _comparacao(cortes: list[dict], source: str) -> dict:
     return saida
 
 
+def _quantil(valores: list[float], q: float) -> float | None:
+    if not valores:
+        return None
+    ordenados = sorted(valores)
+    pos = (len(ordenados) - 1) * q
+    baixo, alto = math.floor(pos), math.ceil(pos)
+    if baixo == alto:
+        return ordenados[baixo]
+    peso = pos - baixo
+    return ordenados[baixo] * (1 - peso) + ordenados[alto] * peso
+
+
+def _calibracao_tiktok(cortes: list[dict], thresholds: tuple[float, ...]) -> dict:
+    scores = [float(item["score"]) for corte in cortes for item in corte["itens"]]
+    dias = sorted({corte["T"][:10] for corte in cortes})
+    por_limiar = {}
+    for threshold in thresholds:
+        candidatos = sum(score >= threshold for score in scores)
+        por_limiar[f"{threshold:g}"] = {
+            "candidatos": candidatos,
+            "percentual": candidatos / len(scores) if scores else None,
+            "candidatos_por_dia": candidatos / len(dias) if dias else None,
+        }
+    return {
+        "n_scores": len(scores),
+        "dias": len(dias),
+        "percentis": {
+            nome: _quantil(scores, q)
+            for nome, q in (("p50", 0.50), ("p90", 0.90), ("p95", 0.95), ("p99", 0.99))
+        },
+        "limiares": por_limiar,
+        "limitacoes": [
+            "candidatos_por_dia nao aplica cooldown nem deduplicacao",
+            "o replay usa apenas o score numerico e nao refaz chamadas ao LLM",
+            "conta apenas cortes com pool minimo e desfecho futuro no horizonte",
+        ],
+    }
+
+
 def _percentil(itens: list[dict], campo: str, valor: float) -> float:
     """Fração do corte com `campo` abaixo de `valor` (empate conta meio)."""
     vals = [i[campo] for i in itens if i[campo] is not None]
@@ -346,6 +386,7 @@ def run_backtest(
     k: int = 3,
     min_pool: int = 5,
     subida: int = SUBIDA_FORTE,
+    calibration_thresholds: tuple[float, ...] = (75.0, 80.0, 85.0, 90.0, 92.0),
 ) -> dict:
     if limit_products is None:
         limit_products = settings.TREND_MAX_PRODUCTS
@@ -385,7 +426,7 @@ def run_backtest(
         }
         for p in FONTES[source]["preditores"]
     }
-    return {
+    relatorio = {
         "params": {
             "source": source,
             "horizon_hours": horizon_hours,
@@ -402,6 +443,9 @@ def run_backtest(
         "comparacao": _comparacao(cortes, source),
         "eventos": _eventos(cortes) if source == "mercadolivre" else [],
     }
+    if source == "tiktok":
+        relatorio["calibracao"] = _calibracao_tiktok(cortes, calibration_thresholds)
+    return relatorio
 
 
 def _fmt(v) -> str:
@@ -438,7 +482,7 @@ def _tabela(rel: dict) -> str:
                 f"{_fmt(m['precision_at_k']['media']):>10}{m['spearman']['n']:>8}{base:>8}"
                 f"{area:>8}"
             )
-    linhas += _tabela_comparacao(rel) + _tabela_eventos(rel)
+    linhas += _tabela_comparacao(rel) + _tabela_calibracao(rel) + _tabela_eventos(rel)
     return "\n".join(linhas)
 
 
@@ -457,6 +501,27 @@ def _tabela_comparacao(rel: dict) -> list[str]:
         for d, por_m in por_d.items():
             for m, r in por_m.items():
                 linhas.append(f"  − {base:<14}{d:<16}{m:<16}{_ic(r)}")
+    return linhas
+
+
+def _tabela_calibracao(rel: dict) -> list[str]:
+    calibracao = rel.get("calibracao")
+    if calibracao is None:
+        return []
+    percentis = calibracao["percentis"]
+    linhas = [
+        "",
+        f"Calibracao TikTok: {calibracao['n_scores']} scores em {calibracao['dias']} dias",
+        "  " + "  ".join(f"{nome}={_fmt(valor)}" for nome, valor in percentis.items()),
+        "  limiar  candidatos  % dos scores  candidatos/dia (sem cooldown)",
+    ]
+    for threshold, dados in calibracao["limiares"].items():
+        percentual = dados["percentual"]
+        por_dia = dados["candidatos_por_dia"]
+        pct_txt = "-" if percentual is None else f"{100 * percentual:.1f}%"
+        dia_txt = "-" if por_dia is None else f"{por_dia:.1f}"
+        linhas.append(f"  {threshold:>6}  {dados['candidatos']:>10}  {pct_txt:>11}  {dia_txt:>15}")
+    linhas.extend(f"  AVISO: {texto}" for texto in calibracao["limitacoes"])
     return linhas
 
 
@@ -498,6 +563,13 @@ def main() -> int:
     parser.add_argument(
         "--subida", type=int, default=SUBIDA_FORTE, help="posições que contam como subida forte"
     )
+    parser.add_argument(
+        "--calibration-thresholds",
+        type=float,
+        nargs="+",
+        default=[75, 80, 85, 90, 92],
+        help="limiares candidatos para o relatório TikTok",
+    )
     parser.add_argument("--json", action="store_true", help="relatório completo em JSON")
     args = parser.parse_args()
 
@@ -510,6 +582,7 @@ def main() -> int:
         k=args.k,
         min_pool=args.min_pool,
         subida=args.subida,
+        calibration_thresholds=tuple(args.calibration_thresholds),
     )
     print(json.dumps(rel, ensure_ascii=False, default=str) if args.json else _tabela(rel))
     return 0
