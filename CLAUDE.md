@@ -255,10 +255,15 @@ Não são "coisas a arrumar agora", são coisas que vão te morder se você não
    pouco saldo a Apify recusa a execução. Upgrade de plano ou recarga destrava; sem isso, só na
    virada do ciclo. Saldo da conta (grátis): `GET https://api.apify.com/v2/users/me/limits`.
    Voltou sozinha na virada do ciclo (24/10): 15 vídeos por coleta, US$ 0,34 em 2,5 dias.
-   **O LLM tem o mesmo problema:** desde 2026-10-24 a OpenAI devolve 429
-   `credit_balance_exhausted`, o circuito do `llm` fica aberto e 100% dos insights caem no
-   fallback; o vínculo TikTok → ML (TIE-18) também para (`circuit_open`). Só recarga destrava.
+   **O LLM tem o mesmo problema:** de 2026-10-24 a 2026-10-29 a OpenAI devolveu 429
+   `credit_balance_exhausted`, o circuito do `llm` ficou aberto e 100% dos insights caíram no
+   fallback; o vínculo TikTok → ML (TIE-18) também parou (`circuit_open`). Só recarga destrava.
    Ver o motivo: uma chamada mínima a `/chat/completions` traz `error.code` na resposta.
+   **Depois da recarga o circuito segue aberto até a próxima tentativa** (até 30 min):
+   confirmada a chamada com 200, feche-o com
+   `breaker_for("llm").record_success()` dentro do worker. Feito assim em 2026-10-29: a análise
+   seguinte saiu com 120 de 120 insights com LLM, e o vínculo processou os 31 vídeos da fila.
+   LLM local não substitui (TIE-61: 3B e 7B no Ollama perderam para o próprio fallback numérico).
 7. **As hashtags do TikTok definem o que o motor monitora.** `fyp` trazia conteúdo global e
    antigo (vídeos em árabe, de 2022); desde 2026-09-24 o `backend/.env` usa
    `tiktokmademebuyit,achadinhos,achadosdashopee`. **Custo:** ~US$ 0,0037 por vídeo
