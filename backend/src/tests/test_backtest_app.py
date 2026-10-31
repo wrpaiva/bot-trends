@@ -72,9 +72,16 @@ def test_relatorio_de_calibracao_tiktok_mede_percentis_e_limiares(db):
     calibracao = rel["calibracao"]
     assert calibracao["n_scores"] == 6
     assert calibracao["dias"] == 1
+    assert calibracao["intervalo_observado"] == {
+        "primeiro_T": T0.isoformat(),
+        "ultimo_T": T0.isoformat(),
+        "dias": 1,
+    }
     assert set(calibracao["percentis"]) == {"p50", "p90", "p95", "p99"}
     assert calibracao["limiares"]["0"]["candidatos"] == 6
+    assert calibracao["limiares"]["0"]["videos_distintos"] == 6
     assert calibracao["limiares"]["0"]["candidatos_por_dia"] == 6
+    assert calibracao["limiares"]["0"]["alertas_simulados"] == 6
     assert calibracao["limiares"]["101"]["candidatos"] == 0
     assert any("cooldown" in texto for texto in calibracao["limitacoes"])
     assert any("desfecho futuro" in texto for texto in calibracao["limitacoes"])
@@ -85,6 +92,52 @@ def test_relatorio_de_calibracao_vazio_nao_divide_por_zero():
     rel = bt.run_backtest(db, calibration_thresholds=(85,))
     assert rel["calibracao"]["percentis"]["p50"] is None
     assert rel["calibracao"]["limiares"]["85"]["percentual"] is None
+
+
+def test_calibracao_nao_realerta_artificialmente_ao_cruzar_corte_fixo(monkeypatch):
+    monkeypatch.setattr(bt.settings, "ALERT_COOLDOWN_HOURS", 24)
+    cortes = [
+        {"T": T0.isoformat(), "itens": [{"product_id": "v1", "score": 80}]},
+        {
+            "T": (T0 + dt.timedelta(hours=6)).isoformat(),
+            "itens": [{"product_id": "v1", "score": 85}],
+        },
+    ]
+
+    # Em um limiar candidato 75, ambos já são SUBINDO. Cruzar o corte fixo
+    # de produção (85) não pode parecer escalada e furar o cooldown.
+    assert bt._simula_alertas_tiktok(cortes, 75) == 1
+
+
+def test_calibracao_simula_dedupe_e_cooldown_por_video(monkeypatch):
+    monkeypatch.setattr(bt.settings, "ALERT_COOLDOWN_HOURS", 24)
+    cortes = [
+        {"T": T0.isoformat(), "itens": [{"product_id": "v1", "score": 85}]},
+        {
+            "T": (T0 + dt.timedelta(hours=6)).isoformat(),
+            "itens": [
+                {"product_id": "v1", "score": 85},
+                {"product_id": "v2", "score": 85},
+            ],
+        },
+        {
+            "T": (T0 + dt.timedelta(hours=30)).isoformat(),
+            "itens": [{"product_id": "v1", "score": 85}],
+        },
+    ]
+
+    calibracao = bt._calibracao_tiktok(cortes, (85,))
+    dados = calibracao["limiares"]["85"]
+    assert calibracao["intervalo_observado"] == {
+        "primeiro_T": T0.isoformat(),
+        "ultimo_T": (T0 + dt.timedelta(hours=30)).isoformat(),
+        "dias": 2,
+    }
+    assert dados["candidatos"] == 4
+    assert dados["videos_distintos"] == 2
+    # v1 no segundo corte ainda está em cooldown; v2 e v1 após 30 h alertam.
+    assert dados["alertas_simulados"] == 3
+    assert dados["alertas_simulados_por_dia"] == pytest.approx(1.5)
 
 
 def test_score_no_corte_nao_ve_o_futuro(db):
@@ -126,7 +179,8 @@ def test_tabela_avisa_quando_o_pool_e_pequeno_para_o_k(db):
     assert "AVISO" in texto
     assert "views_por_hora" in texto
     assert "Calibracao TikTok" in texto
-    assert "sem cooldown" in texto
+    assert "alertas/dia (sim.)" in texto
+    assert "intervalo observado" in texto
 
 
 def test_main_imprime_a_tabela(db, monkeypatch, capsys):

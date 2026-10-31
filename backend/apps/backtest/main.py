@@ -53,6 +53,7 @@ import json
 import math
 
 from apps.worker import tasks_trend
+from src.domain.alerting import AlertState, decide_alert
 from src.domain.backtest import (
     acerto_top_k,
     auc,
@@ -62,7 +63,7 @@ from src.domain.backtest import (
     summarize,
 )
 from src.domain.percentile import PercentileContext
-from src.domain.scoring import NumericScoreStrategy
+from src.domain.scoring import FALLBACK_CORTES, NumericScoreStrategy
 from src.infrastructure.config import settings
 from src.infrastructure.utils.datetime_utils import ensure_utc
 
@@ -311,29 +312,86 @@ def _quantil(valores: list[float], q: float) -> float | None:
     return ordenados[baixo] * (1 - peso) + ordenados[alto] * peso
 
 
+def _classificacao_calibracao_tiktok(score: float, threshold: float) -> str:
+    """Classificação de fallback coerente com o limiar que está sendo calibrado.
+
+    ``SUBINDO`` começa no limiar candidato, para que dois scores elegíveis não
+    aparentem uma subida de faixa apenas porque o corte fixo de produção é 85.
+    ``VIRALIZANDO`` nunca desce do corte absoluto calibrado de 92; para limiar
+    acima de 85, acompanha-o mantendo a distância histórica de 7 pontos. Isso
+    evita transformar o cruzamento de 85 em escalada quando se calibra abaixo
+    dele, sem permitir que VIRALIZANDO fique no mesmo nível de SUBINDO.
+    """
+    subindo_padrao, viralizando_padrao = FALLBACK_CORTES["tiktok"]
+    viralizando = max(viralizando_padrao, threshold + viralizando_padrao - subindo_padrao)
+    if score >= viralizando:
+        return "VIRALIZANDO"
+    if score >= threshold:
+        return "SUBINDO"
+    return "ESTAVEL"
+
+
+def _simula_alertas_tiktok(cortes: list[dict], threshold: float) -> int:
+    """Reproduz a decisão pura de alerta, sem ler nem escrever ``alert_state``."""
+    estados: dict[str, AlertState] = {}
+    cooldown = dt.timedelta(hours=settings.ALERT_COOLDOWN_HOURS)
+    alertas = 0
+    for corte in sorted(cortes, key=lambda c: c["T"]):
+        agora = ensure_utc(dt.datetime.fromisoformat(corte["T"]))
+        for item in corte["itens"]:
+            score = float(item["score"])
+            product_id = item["product_id"]
+            classificacao = _classificacao_calibracao_tiktok(score, threshold)
+            decisao = decide_alert(
+                final_score=score,
+                classification=classificacao,
+                last=estados.get(product_id),
+                now=agora,
+                threshold=threshold,
+                cooldown=cooldown,
+            )
+            if decisao.send:
+                alertas += 1
+                estados[product_id] = AlertState(agora, classificacao)
+    return alertas
+
+
 def _calibracao_tiktok(cortes: list[dict], thresholds: tuple[float, ...]) -> dict:
     scores = [float(item["score"]) for corte in cortes for item in corte["itens"]]
     dias = sorted({corte["T"][:10] for corte in cortes})
+    intervalo = {
+        "primeiro_T": cortes[0]["T"] if cortes else None,
+        "ultimo_T": cortes[-1]["T"] if cortes else None,
+        "dias": len(dias),
+    }
     por_limiar = {}
     for threshold in thresholds:
-        candidatos = sum(score >= threshold for score in scores)
+        candidatos = [
+            item for corte in cortes for item in corte["itens"] if float(item["score"]) >= threshold
+        ]
+        alertas = _simula_alertas_tiktok(cortes, threshold)
         por_limiar[f"{threshold:g}"] = {
-            "candidatos": candidatos,
-            "percentual": candidatos / len(scores) if scores else None,
-            "candidatos_por_dia": candidatos / len(dias) if dias else None,
+            "candidatos": len(candidatos),
+            "videos_distintos": len({item["product_id"] for item in candidatos}),
+            "percentual": len(candidatos) / len(scores) if scores else None,
+            "candidatos_por_dia": len(candidatos) / len(dias) if dias else None,
+            "alertas_simulados": alertas,
+            "alertas_simulados_por_dia": alertas / len(dias) if dias else None,
         }
     return {
         "n_scores": len(scores),
+        # Mantido para consumidores antigos; o intervalo explícito é canônico.
         "dias": len(dias),
+        "intervalo_observado": intervalo,
         "percentis": {
             nome: _quantil(scores, q)
             for nome, q in (("p50", 0.50), ("p90", 0.90), ("p95", 0.95), ("p99", 0.99))
         },
         "limiares": por_limiar,
         "limitacoes": [
-            "candidatos_por_dia nao aplica cooldown nem deduplicacao",
             "o replay usa apenas o score numerico e nao refaz chamadas ao LLM",
             "conta apenas cortes com pool minimo e desfecho futuro no horizonte",
+            "a simulacao alinha SUBINDO ao limiar candidato; VIRALIZANDO nao desce de 92 e, acima de 85, preserva a distancia de 7 pontos; usa a mesma regra de cooldown do produto",
         ],
     }
 
@@ -512,15 +570,21 @@ def _tabela_calibracao(rel: dict) -> list[str]:
     linhas = [
         "",
         f"Calibracao TikTok: {calibracao['n_scores']} scores em {calibracao['dias']} dias",
+        "  intervalo observado: "
+        f"{calibracao['intervalo_observado']['primeiro_T'] or '-'} até "
+        f"{calibracao['intervalo_observado']['ultimo_T'] or '-'}",
         "  " + "  ".join(f"{nome}={_fmt(valor)}" for nome, valor in percentis.items()),
-        "  limiar  candidatos  % dos scores  candidatos/dia (sem cooldown)",
+        "  limiar  candidatos  vídeos distintos  candidatos/dia  alertas/dia (sim.)",
     ]
     for threshold, dados in calibracao["limiares"].items():
-        percentual = dados["percentual"]
         por_dia = dados["candidatos_por_dia"]
-        pct_txt = "-" if percentual is None else f"{100 * percentual:.1f}%"
         dia_txt = "-" if por_dia is None else f"{por_dia:.1f}"
-        linhas.append(f"  {threshold:>6}  {dados['candidatos']:>10}  {pct_txt:>11}  {dia_txt:>15}")
+        alertas_dia = dados["alertas_simulados_por_dia"]
+        alertas_txt = "-" if alertas_dia is None else f"{alertas_dia:.1f}"
+        linhas.append(
+            f"  {threshold:>6}  {dados['candidatos']:>10}  {dados['videos_distintos']:>17}"
+            f"  {dia_txt:>15}  {alertas_txt:>18}"
+        )
     linhas.extend(f"  AVISO: {texto}" for texto in calibracao["limitacoes"])
     return linhas
 
