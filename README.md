@@ -469,6 +469,24 @@ LLM pesa: numérico sozinho separa mal `SUBINDO` de `ESTAVEL` (medianas 39 e 36)
 (final = numérico) o replay dá ~9/dia. **Recalibre quando a coleta do TikTok voltar**, com o mesmo
 replay.
 
+Para recalibrar sem alterar dados nem disparar alertas, rode o backtest com os dados recentes. O
+relatório TikTok inclui p50/p90/p95/p99 do score numérico, intervalo observado
+(`primeiro_T`, `ultimo_T`, dias), candidatos e vídeos distintos por limiar. Para cada limiar,
+também simula alertas por dia com a mesma deduplicação/cooldown do produto. Na simulação,
+`SUBINDO` começa no limiar candidato. `VIRALIZANDO` nunca desce de 92 e, para limiares acima de
+85, fica 7 pontos acima (a distância dos cortes TikTok atuais, 85→92), evitando realerta artificial
+quando um score cruza 85; não escreve no banco
+nem envia alertas. O recorte considera apenas cortes com pool
+mínimo e desfecho futuro, e não refaz o LLM — limitações que também aparecem no relatório.
+Compare ainda o score com `views_por_hora` nos horizontes
+compatíveis com a coleta real antes de mudar o default e os cortes do fallback:
+
+```bash
+docker exec trends_api python -m apps.backtest.main --source tiktok \
+  --horizon-hours 6 --window-hours 72 --limit-products 500 --k 3 --min-pool 5 \
+  --calibration-thresholds 75 80 85 90 92 --json
+```
+
 **Fallback sem LLM.** O final é o numérico, e o corte de `SUBINDO` de cada fonte é igual ao seu
 limiar — senão o alerta do fallback sairia rotulado `ESTAVEL` (um teste garante). `VIRALIZANDO`:
 ML ≥ 80 (~p99; o LLM nunca deu `VIRALIZANDO` a item do ML), TikTok ≥ 92 (~top 5%). No replay,
